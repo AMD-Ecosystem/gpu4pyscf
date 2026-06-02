@@ -13,17 +13,55 @@
 # limitations under the License.
 
 cmake_minimum_required (VERSION 3.19 FATAL_ERROR) # 3.19 is required by cutlass
-project (gpu4pyscf C CXX CUDA Fortran)
+
+# ROCm/HIP port (Strategy A). Under USE_HIP the .cu sources are retagged
+# LANGUAGE HIP and compiled by the HIP toolchain; the single compat header
+# gpu4pyscf/lib/cuda_to_hip.h (force-included below) maps the CUDA spellings
+# to HIP so the kernel sources stay in CUDA form. The CUDA build is unchanged.
+option(USE_HIP "Build the CUDA kernel libraries for ROCm/HIP" OFF)
+if(USE_HIP)
+  project (gpu4pyscf C CXX HIP)
+  if(DEFINED CMAKE_HIP_ARCHITECTURES)
+    # honour the cache value (e.g. gfx90a / gfx1100 / gfx1151)
+  elseif(DEFINED ENV{HIP_ARCHITECTURES})
+    set(CMAKE_HIP_ARCHITECTURES "$ENV{HIP_ARCHITECTURES}")
+  endif()
+  message("HIP_ARCHITECTURES: ${CMAKE_HIP_ARCHITECTURES}")
+else()
+  project (gpu4pyscf C CXX CUDA Fortran)
+endif()
 
 set(CMAKE_C_STANDARD "99")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(USE_HIP)
+  # Force-include the compat shim on every HIP TU so the cuda* spellings and
+  # the wave64 subgroup-reduction fix are defined before any source is parsed.
+  # Pin fp-contract so the J/K fingerprints match the CPU PySCF reference to
+  # the test's 7 d.p. bar (clang-HIP defaults to -ffp-contract=fast).
+  # -fvisibility=default: the integral kernels share `extern __device__` Rys-root
+  # tables and `__constant__` index tables across translation units; with HIP RDC
+  # device globals default to protected visibility and amdgcn-link cannot resolve
+  # them across objects, so force default visibility for the device link.
+  # -fgpu-rdc: the integral libraries split device code across translation units
+  # (the CUDA build uses CUDA_SEPARABLE_COMPILATION). CMake's HIP_SEPARABLE_COMPILATION
+  # does not inject the relocatable-device-code flag, so set it explicitly here and
+  # add --hip-link -fgpu-rdc on the shared-library link below.
+  # -Wno-register: a few unrolled kernels still use the (C++17-removed) register
+  # keyword; nvcc tolerates it, clang-HIP rejects it, so downgrade to a warning.
+  string(APPEND CMAKE_HIP_FLAGS
+    " -DUSE_HIP -include ${PROJECT_SOURCE_DIR}/cuda_to_hip.h -ffp-contract=on -fvisibility=default -fgpu-rdc -Wno-register")
+  string(APPEND CMAKE_SHARED_LINKER_FLAGS " -fgpu-rdc --hip-link")
+  # Resolve `#include <cuda_runtime.h>` in the kernel sources to the compat shim.
+  include_directories(BEFORE ${PROJECT_SOURCE_DIR}/hip_compat)
+endif()
+
 # For better performance on A100, the option
 # -DCUDA_ARCHITECTURES="70-real;80-real" can be added to cmake command
 if(DEFINED CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES "${CUDA_ARCHITECTURES}")
-else()
+elseif(NOT USE_HIP)
   set(CMAKE_CUDA_ARCHITECTURES "70-real;80-real;90-real")
 endif()
 message("CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
@@ -102,7 +140,23 @@ link_directories(${PROJECT_SOURCE_DIR}/deps/lib)
 set(C_LINK_TEMPLATE "<CMAKE_C_COMPILER> <CMAKE_SHARED_LIBRARY_C_FLAGS> <LANGUAGE_COMPILE_FLAGS> <LINK_FLAGS> <CMAKE_SHARED_LIBRARY_CREATE_C_FLAGS> -o <TARGET> <OBJECTS> <LINK_LIBRARIES>")
 set(CXX_LINK_TEMPLATE "<CMAKE_CXX_COMPILER> <CMAKE_SHARED_LIBRARY_CXX_FLAGS> <LANGUAGE_COMPILE_FLAGS> <LINK_FLAGS> <CMAKE_SHARED_LIBRARY_CREATE_CXX_FLAGS> -o <TARGET> <OBJECTS> <LINK_LIBRARIES>")
 
-option(BUILD_CUTLASS "Using cutlass" ON)
+# A .cu retagged LANGUAGE HIP is compiled by the HIP toolchain under USE_HIP.
+function(g4p_set_hip_language target)
+  if(USE_HIP)
+    get_target_property(_g4p_srcs ${target} SOURCES)
+    foreach(_g4p_src ${_g4p_srcs})
+      if(_g4p_src MATCHES "\\.cu$")
+        set_source_files_properties(${_g4p_src} PROPERTIES LANGUAGE HIP)
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
+if(USE_HIP)
+  option(BUILD_CUTLASS "Using cutlass" OFF)
+else()
+  option(BUILD_CUTLASS "Using cutlass" ON)
+endif()
 if(BUILD_CUTLASS)
   include(ExternalProject)
   ExternalProject_Add(cutlass
@@ -121,22 +175,39 @@ endif()
 
 add_subdirectory(gint)
 add_subdirectory(gvhf)
-add_subdirectory(gdft)
 add_subdirectory(cupy_helper)
-add_subdirectory(sem)
-
-option(BUILD_SOLVENT "Using SMD solvent" ON)
-if(BUILD_SOLVENT)
-  add_subdirectory(solvent)
-endif()
-
 add_subdirectory(gvhf-rys)
 add_subdirectory(gvhf-md)
-add_subdirectory(pbc)
-add_subdirectory(multigrid)
+# The pinned base (#773, "Optimize J/K build for molecular code") routes the
+# molecular HF hcore and the scf/jk.py Schwarz-condition cache through the pbc
+# 1e-integral kernels (libpbc) and import-cascades through gpu4pyscf.dft.libxc
+# (libgdft), so even plain RHF get_jk needs libgecp, libgdft and libpbc in
+# addition to the J/K engine libraries. All three build under HIP; gdft and pbc
+# kernels are made wave-size correct alongside the gvhf-md J-engine fix.
 add_subdirectory(ecp)
+add_subdirectory(gdft)
+add_subdirectory(pbc)
 
-option(BUILD_LIBXC "Using libxc for DFT" ON)
+# Milestone 1 of the ROCm/HIP port builds the integral / HF (J/K) libraries
+# plus the import-/runtime-coupled libgecp, libgdft and libpbc. The grouped-GEMM
+# (cupy_helper CUTLASS), external libxc functional library, DFT functional
+# evaluation, solvent, sem and multigrid are deferred to later milestones.
+if(NOT USE_HIP)
+  add_subdirectory(sem)
+
+  option(BUILD_SOLVENT "Using SMD solvent" ON)
+  if(BUILD_SOLVENT)
+    add_subdirectory(solvent)
+  endif()
+
+  add_subdirectory(multigrid)
+endif()
+
+if(USE_HIP)
+  option(BUILD_LIBXC "Using libxc for DFT" OFF)
+else()
+  option(BUILD_LIBXC "Using libxc for DFT" ON)
+endif()
 if(BUILD_LIBXC)
   include(ExternalProject)
   ExternalProject_Add(libxc

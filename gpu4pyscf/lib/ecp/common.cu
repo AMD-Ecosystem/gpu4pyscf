@@ -135,12 +135,23 @@ void block_reduce(double val, double *d_out) {
 
     if (tid < 32) {
         double value = sdata[tid]; // load to register
+#ifdef USE_HIP
+        // The shared-memory pass above leaves 32 partial sums in threads 0-31.
+        // Reduce them with an explicit width-32 shuffle so the segment is the
+        // low 32 lanes on both wave32 and wave64 (HIP's __shfl_down_sync would
+        // otherwise default to the full warpSize, pulling stale lanes 32-63 on
+        // gfx9). The width-32 segment matches the CUDA 32-lane warp reduction.
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            value += __shfl_down(value, offset, 32);
+        }
+#else
         unsigned int mask = __activemask(); // all lanes in warp 0 are active
         value += __shfl_down_sync(mask, value, 16);
         value += __shfl_down_sync(mask, value, 8);
         value += __shfl_down_sync(mask, value, 4);
         value += __shfl_down_sync(mask, value, 2);
         value += __shfl_down_sync(mask, value, 1);
+#endif
         if (tid == 0) {
             d_out[0] += value;
         }

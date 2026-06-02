@@ -1715,7 +1715,54 @@ void ket_sph2sorted_kernel(double *out, double *input, double *recontract_coef,
     }
 }
 
+#ifdef USE_HIP
+// Probe the upper bound of get_smid() (HIP __smid(), the hardware CU-slot id).
+// On AMD GPUs __smid() can exceed multiProcessorCount because the (SE,CU) id
+// packing is sparse, so a scratch pool indexed by get_smid()*POOL_SIZE must be
+// sized to this id range, not to the active-CU count. Each resident block
+// records its slot id; a brief spin keeps many blocks co-resident so the launch
+// visits the full set of CU slots the scheduler can use.
+static __global__
+void probe_smid_kernel(unsigned *out_max)
+{
+    unsigned long long t0 = clock64();
+    while (clock64() - t0 < 1000000ULL) { /* keep this block resident briefly */ }
+    if (threadIdx.x == 0) {
+        atomicMax(out_max, get_smid());
+    }
+}
+#endif
+
 extern "C" {
+#ifdef USE_HIP
+// Returns max(get_smid()) + 1 observed on the current device: the number of
+// scratch-pool slots a get_smid()-indexed kernel can address. Caller sizes the
+// pool to this value (with margin) instead of multiProcessorCount.
+int probe_smid_range(int multiProcessorCount)
+{
+    unsigned *d_max = nullptr;
+    if (cudaMalloc(&d_max, sizeof(unsigned)) != cudaSuccess) {
+        return -1;
+    }
+    cudaMemset(d_max, 0, sizeof(unsigned));
+    int blocks = multiProcessorCount > 0 ? multiProcessorCount * 8 : 1024;
+    probe_smid_kernel<<<blocks, THREADS>>>(d_max);
+    cudaError_t err = cudaGetLastError();
+    if (err == cudaSuccess) {
+        err = cudaDeviceSynchronize();
+    }
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA Error in probe_smid_kernel: %s\n", cudaGetErrorString(err));
+        cudaFree(d_max);
+        return -1;
+    }
+    unsigned h_max = 0;
+    cudaMemcpy(&h_max, d_max, sizeof(unsigned), cudaMemcpyDeviceToHost);
+    cudaFree(d_max);
+    return (int)h_max + 1;
+}
+#endif
+
 int bra_sorted2cart(double *out, double *input, double *recontract_coef,
                     int *recontract_bas, int *pbas_idx_recontraction,
                     int *c_ao_loc, int *p_ao_loc, int nbas, int npbas, int ncol, int counts)

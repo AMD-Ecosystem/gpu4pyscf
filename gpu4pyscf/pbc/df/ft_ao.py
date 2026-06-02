@@ -41,6 +41,7 @@ from gpu4pyscf.gto.mole import (
     group_basis, SortedGTO, PTR_BAS_COORD,
     extract_pgto_params, most_diffuse_pgto, RysIntEnvVars, PBCIntEnvVars)
 from gpu4pyscf.__config__ import props as gpu_specs
+from gpu4pyscf.__config__ import pool_slots
 
 __all__ = [
     'ft_aopair', 'ft_aopair_kpts', 'ft_ao'
@@ -373,7 +374,10 @@ class FTOpt:
             pair_splits = splits_by_blocksize(ao_pair_offsets, batch_size)
             ao_pair_offsets = ao_pair_offsets[pair_splits]
 
-        workers = gpu_specs['multiProcessorCount']
+        # ft_ao.cu indexes this pool by get_smid()*POOL_SIZE; on ROCm get_smid()
+        # (HIP __smid()) can exceed multiProcessorCount, so size to pool_slots
+        # which covers the full smid range (== multiProcessorCount on CUDA).
+        workers = pool_slots
         pool = cp.empty((workers, POOL_SIZE), dtype=np.float64)
         aft_envs = self.aft_envs
         img_idx = cp.asarray(self.img_idx)

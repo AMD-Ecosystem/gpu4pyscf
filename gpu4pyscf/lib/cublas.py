@@ -14,12 +14,25 @@
 
 
 import ctypes
+import ctypes.util
 from cupy.cuda import device
 from cupy_backends.cuda.libs import cublas #NOQA
 
-libcublas = ctypes.CDLL('libcublas.so')
+# Under ROCm the cuBLAS backend is hipBLAS, so the dense-vendor library is
+# libhipblas.so rather than libcublas.so. Load it lazily and tolerate its
+# absence: this module currently exposes no extra entry points (the handle
+# below is the only consumer and the cupy_backends.cuda.libs.cublas backend,
+# already ROCm-aware, is the real BLAS path).
+def _load_blas_library():
+    for name in ('cublas', 'hipblas'):
+        path = ctypes.util.find_library(name)
+        if path is not None:
+            return ctypes.CDLL(path)
+    return None
+
+libcublas = _load_blas_library()
 
 # This needs to be moved into functions, and lazy evaluate
 _handle = device.get_cublas_handle() #NOQA
 
-# NOTE: add modified culbas function here
+# NOTE: add modified cublas function here

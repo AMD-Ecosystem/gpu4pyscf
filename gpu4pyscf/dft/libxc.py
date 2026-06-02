@@ -85,8 +85,15 @@ if _libxc is None:
         `pip3 install gpu4pyscf-libxc-cuda12x`"
     )
 
-_libxc.xc_version_string.restype = ctypes.c_char_p
-__version__ = _libxc.xc_version_string().decode() + ' (CUDA)'
+# Querying the libxc version requires the functional library to be present.
+# There is no ROCm libxc-GPU build yet (BUILD_LIBXC=OFF for the HIP port; the
+# DFT functional path is a later milestone), so guard the access -- this also
+# avoids an AttributeError on a CUDA box that lacks the libxc wheel.
+if _libxc is not None:
+    _libxc.xc_version_string.restype = ctypes.c_char_p
+    __version__ = _libxc.xc_version_string().decode() + ' (CUDA)'
+else:
+    __version__ = 'unavailable (libXC not installed)'
 
 LDA_OUTPUT_LABELS = [
                 "zk",       # 1, 1

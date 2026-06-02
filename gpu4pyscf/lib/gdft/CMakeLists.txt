@@ -12,8 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --ptxas-options=-v")# -maxrregcount=128")
+if(NOT USE_HIP)
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --ptxas-options=-v")# -maxrregcount=128")
+endif()
 
+# libxc.cu here is gpu4pyscf's own XC-contraction kernel TU (the GDFT_xc_*
+# entry points dft/libxc.py binds), not the external libxc functional library
+# (the deferred BUILD_LIBXC ExternalProject). These are grid / AO-value /
+# density-contraction kernels with block-level reductions only (no warp
+# shuffles), so they are wave-size agnostic. libgdft is built under HIP because
+# the molecular HF J/K path import-cascades through gpu4pyscf.dft.libxc, which
+# load_library('libgdft') at import; the DFT functional evaluation path itself
+# stays deferred (no external libxc).
 add_library(gdft SHARED
   nr_eval_gto.cu
   contract_rho.cu
@@ -23,5 +33,9 @@ add_library(gdft SHARED
   libxc.cu
 )
 
+g4p_set_hip_language(gdft)
 set_target_properties(gdft PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR})
+if(USE_HIP)
+  set_target_properties(gdft PROPERTIES HIP_ARCHITECTURES "${CMAKE_HIP_ARCHITECTURES}")
+endif()

@@ -525,23 +525,35 @@ void unrolled_contract_int3c2e(RysIntEnvVars envs, JKMatrix jk,
         int k0 = ao_loc[ksh] - ao_loc[envs.nbas];
         int lane = thread_id % warpSize;
         int wid  = thread_id / warpSize;
+        // Number of warps cooperating in the block-level reduction below;
+        // wave-size aware (8 warps on wave32, 4 on wave64 for THREADS=256) so
+        // the cross-warp pass never reads stale shared slots on gfx9xx.
+        int nwarps = (blockDim.x + warpSize - 1) / warpSize;
         double *shared = phase + nf3k;
 #pragma unroll
         for (int k = 0; k < nfk; k++) {
             double val = vj_aux[k];
             for (int offset = warpSize/2; offset > 0; offset >>= 1) {
+#ifdef USE_HIP
+                val += __shfl_down(val, offset, warpSize);
+#else
                 val += __shfl_down_sync(0xffffffff, val, offset);
+#endif
             }
             if (lane == 0) {
                 shared[wid] = val;
             }
             __syncthreads();
 
-            if (thread_id < 8) {
+            if (thread_id < nwarps) {
                 val = shared[lane];
             }
-            for (int offset = 4; offset > 0; offset >>= 1) {
+            for (int offset = nwarps/2; offset > 0; offset >>= 1) {
+#ifdef USE_HIP
+                val += __shfl_down(val, offset, warpSize);
+#else
                 val += __shfl_down_sync(0xff, val, offset);
+#endif
             }
             if (thread_id == 0) {
                 atomicAdd(jk.vj+k0+k, val);

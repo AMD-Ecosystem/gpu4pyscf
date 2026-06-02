@@ -36,6 +36,7 @@ from gpu4pyscf.scf.jk import (
     _nearest_power2, _scale_sp_ctr_coeff, _cache_q_cond_and_non0pairs,
     _check_rsh_factors, SHM_SIZE, libvhf_rys)
 from gpu4pyscf.__config__ import props as gpu_specs
+from gpu4pyscf.__config__ import pool_slots
 
 __all__ = [
     'aux_e2',
@@ -188,7 +189,10 @@ class Int3c2eOpt:
         logger.debug1(self.mol, 'sp_batches = %d, ksh_batches = %d',
                       shl_pair_batches, aux_batches)
 
-        workers = gpu_specs['multiProcessorCount']
+        # fill_int3c2e/unrolled_int3c2e index this pool by get_smid()*POOL_SIZE.
+        # On ROCm get_smid() (HIP __smid()) can exceed multiProcessorCount, so
+        # pool_slots covers the full smid range (== multiProcessorCount on CUDA).
+        workers = pool_slots
         pool = cp.empty((workers, POOL_SIZE))
         kern = libvhf_rys.fill_int3c2e
         int3c2e_envs = self.int3c2e_envs

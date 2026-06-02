@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --ptxas-options=-v")
+if(NOT USE_HIP)
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --ptxas-options=-v")
+endif()
 
 set(CMAKE_VERBOSE_MAKEFILE ON)
 add_library(gint SHARED 
@@ -42,6 +44,20 @@ add_library(gint SHARED
 #  set(BUILD_SHARED_LIBS 0)
 #endif()
 
+g4p_set_hip_language(gint)
+if(USE_HIP)
+  # The legacy int2e fill kernels (g2e_root_n.cu, included by nr_fill_ao_ints.cu)
+  # instantiate huge GOUTSIZE local arrays for the high angular-momentum cases
+  # (NROOTS 7/8); at -O2 device codegen spills > 360 KB to scratch and
+  # amdgcn-link rejects the frame. Final device codegen happens at the gint
+  # relocatable-device-code link, so the opt level must be lowered there too.
+  # gint is the legacy ERI engine (the hot path is gvhf-rys), so -O1 here is fine.
+  set_source_files_properties(nr_fill_ao_ints.cu PROPERTIES COMPILE_OPTIONS "-O1")
+endif()
 set_target_properties(gint PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}
-  CUDA_SEPARABLE_COMPILATION ON)
+  CUDA_SEPARABLE_COMPILATION ON
+  HIP_SEPARABLE_COMPILATION ON)
+if(USE_HIP)
+  target_link_options(gint PRIVATE -O1)
+endif()

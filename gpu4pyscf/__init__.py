@@ -16,7 +16,20 @@ __version__ = '1.7.1'
 
 from . import _patch_pyscf
 
-from . import lib, grad, hessian, solvent, scf, dft, tdscf, nac
+# ROCm/HIP port -- Milestone 1 (HF / integrals). The DFT-dependent subpackages
+# (grad, hessian, solvent, dft, tdscf, nac) transitively load libgdft and the
+# CUTLASS grouped-GEMM kernels, neither of which is part of the HF / integral
+# milestone (gen_grids needs a HIP double3 rewrite; the XC functional path
+# needs libxc-HIP; grouped GEMM needs a hipBLAS/CK reimplementation). Importing
+# them here would fail at package import on ROCm, so under HIP only lib and scf
+# (the HF J/K path) are wired eagerly; the rest stay importable on demand once
+# their kernels are ported. On CUDA every subpackage is imported as before.
+import cupy as _cupy
+if getattr(_cupy.cuda.runtime, 'is_hip', False):
+    from . import lib, scf
+else:
+    from . import lib, grad, hessian, solvent, scf, dft, tdscf, nac
+del _cupy
 
 # Overwrite the cupy memory allocator. Make memory pool manage small-sized
 # arrays only.

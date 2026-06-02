@@ -1,5 +1,14 @@
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --ptxas-options=-v")# -maxrregcount=128")
+if(NOT USE_HIP)
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --ptxas-options=-v")# -maxrregcount=128")
+endif()
 
+# libpbc supplies the 1e-integral kernels (PBCint1e_kin/ovlp, PBCsort_pair_ij,
+# PBCovlp_mask_estimation) that the molecular HF hcore and scf/jk.py Schwarz
+# cache call at this pinned base, so it is part of the HF milestone. The shared
+# warp-max reduction in int3c2e_create_tasks.cuh is made wave-size correct
+# (see that header). The wave64-broken __ballot path lives only in the
+# uncompiled int3c2e_create_tasks_o1.cuh and is deferred with the periodic
+# int3c2e milestone.
 add_library(pbc SHARED
   pbc_driver.cu
   ft_ao.cu ft_ao_ip1.cu
@@ -15,8 +24,13 @@ add_library(pbc SHARED
   decompress.cu fill_triu.cu
 )
 
+g4p_set_hip_language(pbc)
 set_target_properties(pbc PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}
-  CUDA_SEPARABLE_COMPILATION ON)
+  CUDA_SEPARABLE_COMPILATION ON
+  HIP_SEPARABLE_COMPILATION ON)
+if(USE_HIP)
+  set_target_properties(pbc PROPERTIES HIP_ARCHITECTURES "${CMAKE_HIP_ARCHITECTURES}")
+endif()
 
 target_link_libraries(pbc OpenMP::OpenMP_C)

@@ -21,19 +21,51 @@ from cupy_backends.cuda.libs import cusolver
 from cupy_backends.cuda.libs import cublas
 from cupy.cuda import device
 
-libcusolver = find_library('cusolver')
-libcusolver = ctypes.CDLL(libcusolver)
+# ROCm/HIP build: cuSOLVER's dense generalized eigensolver maps to hipSOLVER.
+# The hipsolverDn{D,Z}sygvd/hegvd entry points are ABI-identical to the
+# cusolverDn ones (same argument order and types, confirmed against
+# hipsolver-dense.h), so only three things differ from the CUDA path: the
+# library name (libhipsolver.so), the enum *values* (hipSOLVER renumbers
+# itype/jobz/uplo away from cuSOLVER's 1/1/0), and the handle -- CuPy-ROCm's
+# device.get_cusolver_handle() returns a rocSOLVER/rocBLAS handle, not a
+# hipSOLVER handle, so a hipSOLVER handle is created here and bound to the
+# current stream. The cholesky() path below goes through CuPy's own potrf
+# backend (already ROCm) and needs no change.
+_IS_ROCM = getattr(cupy.cuda.runtime, 'is_hip', False)
+
+if _IS_ROCM:
+    libcusolver = ctypes.CDLL('libhipsolver.so')
+    CUSOLVER_EIG_TYPE_1 = 211
+    CUSOLVER_EIG_TYPE_2 = 212
+    CUSOLVER_EIG_TYPE_3 = 213
+    CUSOLVER_EIG_MODE_NOVECTOR = 201
+    CUSOLVER_EIG_MODE_VECTOR = 202
+    _FILL_MODE_LOWER = 122  # HIPBLAS_FILL_MODE_LOWER
+    libcusolver.cusolverDnDsygvd_bufferSize = libcusolver.hipsolverDnDsygvd_bufferSize
+    libcusolver.cusolverDnDsygvd = libcusolver.hipsolverDnDsygvd
+    libcusolver.cusolverDnZhegvd_bufferSize = libcusolver.hipsolverDnZhegvd_bufferSize
+    libcusolver.cusolverDnZhegvd = libcusolver.hipsolverDnZhegvd
+
+    libcusolver.hipsolverCreate.restype = int
+    libcusolver.hipsolverCreate.argtypes = [ctypes.c_void_p]
+    libcusolver.hipsolverSetStream.restype = int
+    libcusolver.hipsolverSetStream.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _hipsolver_handle = ctypes.c_void_p()
+    if libcusolver.hipsolverCreate(ctypes.byref(_hipsolver_handle)) != 0:
+        raise RuntimeError('hipsolverCreate failed')
+else:
+    libcusolver = find_library('cusolver')
+    libcusolver = ctypes.CDLL(libcusolver)
+    CUSOLVER_EIG_TYPE_1 = 1
+    CUSOLVER_EIG_TYPE_2 = 2
+    CUSOLVER_EIG_TYPE_3 = 3
+    CUSOLVER_EIG_MODE_NOVECTOR = 0
+    CUSOLVER_EIG_MODE_VECTOR = 1
+    _FILL_MODE_LOWER = cublas.CUBLAS_FILL_MODE_LOWER
 
 # workspace size (lwork) provided by the cusolver*_bufferSize is an 32-bit
 # integer. For arrays above this dimension, the workspace size would overflow.
 MAX_EIGH_DIM = 23150
-
-CUSOLVER_EIG_TYPE_1 = 1
-CUSOLVER_EIG_TYPE_2 = 2
-CUSOLVER_EIG_TYPE_3 = 3
-
-CUSOLVER_EIG_MODE_NOVECTOR = 0
-CUSOLVER_EIG_MODE_VECTOR = 1
 
 libcusolver.cusolverDnDsygvd_bufferSize.restype = int
 libcusolver.cusolverDnDsygvd.restype = int
@@ -120,7 +152,12 @@ def eigh(h, s, overwrite=False):
     else:
         A = h.copy()
         B = s.copy()
-    _handle = device.get_cusolver_handle()
+    if _IS_ROCM:
+        _handle = _hipsolver_handle
+        libcusolver.hipsolverSetStream(
+            _handle, ctypes.c_void_p(cupy.cuda.get_current_stream().ptr))
+    else:
+        _handle = device.get_cusolver_handle()
     w = cupy.zeros(n)
 
     # TODO: reuse workspace
@@ -136,7 +173,7 @@ def eigh(h, s, overwrite=False):
             _handle,
             CUSOLVER_EIG_TYPE_1,
             CUSOLVER_EIG_MODE_VECTOR,
-            cublas.CUBLAS_FILL_MODE_LOWER,
+            _FILL_MODE_LOWER,
             n,
             A.data.ptr,
             n,
@@ -161,7 +198,7 @@ def eigh(h, s, overwrite=False):
         _handle,
         CUSOLVER_EIG_TYPE_1,
         CUSOLVER_EIG_MODE_VECTOR,
-        cublas.CUBLAS_FILL_MODE_LOWER,
+        _FILL_MODE_LOWER,
         n,
         A.data.ptr,
         n,

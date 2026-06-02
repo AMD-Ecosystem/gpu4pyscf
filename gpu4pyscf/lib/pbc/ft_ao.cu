@@ -290,10 +290,21 @@ void ft_aopair_kernel(double *out, PBCIntEnvVars envs, double *pool, int *shl_pa
         __syncthreads();
         if (thread_id < WARPS) {
             int count = img_counts[thread_id];
+#ifdef USE_HIP
+            // Reduce the WARPS per-warp partials (held by threads 0..WARPS-1)
+            // with an explicit width-WARPS shuffle; threads 0..WARPS-1 lie in
+            // one width-WARPS segment on both wave sizes (WARPS is a power of
+            // two <= 32). HIP's __shfl_down_sync would otherwise default to the
+            // full warpSize and reach stale lanes on wave64.
+            for (int offset = WARPS/2; offset > 0; offset /= 2) {
+                count = max(count, __shfl_down(count, offset, WARPS));
+            }
+#else
             unsigned mask = (1u << WARPS) - 1;
             for (int offset = WARPS/2; offset > 0; offset /= 2) {
                 count = max(count, __shfl_down_sync(mask, count, offset));
             }
+#endif
             if (thread_id == 0) {
                 img_max = count;
             }

@@ -12,5 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from gpu4pyscf.pbc import scf
-from gpu4pyscf.pbc import dft
+# ROCm/HIP port -- Milestone 1. The molecular HF path imports gpu4pyscf.pbc
+# only to reach the 1e-integral kernels in pbc.gto.int1e (libpbc). The periodic
+# pbc.scf / pbc.dft stacks pull in libmgrid (multigrid) and the periodic DFT
+# functional path, which are deferred milestones, so they are not wired eagerly
+# on ROCm. On CUDA both subpackages import as before.
+import cupy as _cupy
+if not getattr(_cupy.cuda.runtime, 'is_hip', False):
+    from gpu4pyscf.pbc import scf
+    from gpu4pyscf.pbc import dft
+del _cupy

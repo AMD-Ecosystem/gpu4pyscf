@@ -148,11 +148,24 @@ typedef struct {
     uint8_t fold2yz;
 } Fold3Index;
 
-#ifdef __CUDACC__
+#if defined(__CUDACC__) || defined(__HIPCC__)
 __device__ __forceinline__ unsigned get_smid()
 {
     unsigned smid;
+#ifdef USE_HIP
+    // HIP's __smid() returns a per-compute-unit id (CU_ID in bits 3:0, SE_ID
+    // in bits 5:4 on gfx9), used here only to give each resident block a
+    // private scratch slot. Its value can exceed multiProcessorCount because
+    // the (SE,CU) packing is sparse (gfx90a reaches 125 while
+    // multiProcessorCount is 104), so the host sizes any pool indexed as
+    // pool + get_smid()*POOL_SIZE to the full smid range on ROCm rather than to
+    // multiProcessorCount: see pool_slots in gpu4pyscf/__config__.py, which is
+    // probe_smid_range() (mole_helper.cu) rounded up, used at the df int3c2e
+    // (int3c2e_bdiv.py) and pbc ft_ao pool allocations.
+    smid = __smid();
+#else
     asm volatile("mov.u32 %0, %%smid;" : "=r"(smid));
+#endif
     return smid;
 }
 
