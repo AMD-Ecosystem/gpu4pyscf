@@ -15,7 +15,7 @@
  */
 
 /*
- * Single CUDA-to-HIP compatibility shim for the ROCm/HIP port (Strategy A).
+ * Single CUDA-to-HIP compatibility shim for the ROCm/HIP port.
  * Force-included on every HIP translation unit via -include; on a CUDA build
  * this file is never reached (CMake force-includes it only under USE_HIP).
  * The kernel sources keep their CUDA spelling; this header is the one place

@@ -14,7 +14,7 @@
 
 cmake_minimum_required (VERSION 3.19 FATAL_ERROR) # 3.19 is required by cutlass
 
-# ROCm/HIP port (Strategy A). Under USE_HIP the .cu sources are retagged
+# ROCm/HIP port. Under USE_HIP the .cu sources are retagged
 # LANGUAGE HIP and compiled by the HIP toolchain; the single compat header
 # gpu4pyscf/lib/cuda_to_hip.h (force-included below) maps the CUDA spellings
 # to HIP so the kernel sources stay in CUDA form. The CUDA build is unchanged.
