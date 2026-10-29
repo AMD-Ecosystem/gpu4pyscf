@@ -4,11 +4,8 @@ endif()
 
 # libpbc supplies the 1e-integral kernels (PBCint1e_kin/ovlp, PBCsort_pair_ij,
 # PBCovlp_mask_estimation) that the molecular HF hcore and scf/jk.py Schwarz
-# cache call at this pinned base, so it is part of the HF milestone. The shared
-# warp-max reduction in int3c2e_create_tasks.cuh is made wave-size correct
-# (see that header). The wave64-broken __ballot path lives only in the
-# uncompiled int3c2e_create_tasks_o1.cuh and is deferred with the periodic
-# int3c2e milestone.
+# cache call, so the ROCm build needs it for HF. The shared warp-max reduction
+# in int3c2e_create_tasks.cuh is made wave-size correct (see that header).
 add_library(pbc SHARED
   pbc_driver.cu
   ft_ao.cu ft_ao_ip1.cu contract_ft_ao.cu

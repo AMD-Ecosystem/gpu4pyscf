@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ROCm/HIP port -- Milestone 1. The molecular HF path reaches this subpackage
-# only for the libpbc handle (pbc.df.ft_ao) and the int3c2e task helpers; the
-# periodic density-fitting drivers (fft / aft / df) belong to a later milestone
-# and their eager import here forms a cycle (aft -> pp_int -> pbc.gto.int1e)
-# that the molecular import order would otherwise trip. They stay importable on
-# demand. On CUDA every driver is wired eagerly as before.
+# On ROCm the molecular HF path reaches this subpackage only for the libpbc
+# handle (pbc.df.ft_ao) and the int3c2e task helpers. The periodic
+# density-fitting drivers (fft / aft / df) are not supported there yet, and
+# their eager import forms a cycle (aft -> pp_int -> pbc.gto.int1e) that the
+# molecular import order would trip, so they stay importable on demand. On CUDA
+# every driver is imported eagerly as before.
 import cupy as _cupy
 if not getattr(_cupy.cuda.runtime, 'is_hip', False):
     from . import fft

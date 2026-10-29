@@ -52,7 +52,9 @@ void recontract_gather_kernel(double *out, double *input, int *inp_idx,
     int row_id = blockIdx.x;
     int start = offsets[row_id] + lane;
     int stop = offsets[row_id+1];
+#ifndef USE_HIP
     unsigned mask = __activemask();
+#endif
     for (size_t col = warp; col < naux; col += warps) {
         double real = 0.;
         for (int k = start; k < stop; k += warpSize) {
@@ -61,7 +63,11 @@ void recontract_gather_kernel(double *out, double *input, int *inp_idx,
             real += c * input[address];
         }
         for (int d = warpSize / 2; d > 0; d /= 2) {
+#ifdef USE_HIP
+            real += __shfl_down(real, d, warpSize);
+#else
             real += __shfl_down_sync(mask, real, d, warpSize);
+#endif
         }
         if (lane == 0) {
             size_t address = row_id * naux + col;

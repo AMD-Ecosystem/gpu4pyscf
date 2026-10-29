@@ -18,12 +18,12 @@ endif()
 
 # libxc.cu here is gpu4pyscf's own XC-contraction kernel TU (the GDFT_xc_*
 # entry points dft/libxc.py binds), not the external libxc functional library
-# (the deferred BUILD_LIBXC ExternalProject). These are grid / AO-value /
+# (the BUILD_LIBXC ExternalProject, off for ROCm). These are grid / AO-value /
 # density-contraction kernels with block-level reductions only (no warp
 # shuffles), so they are wave-size agnostic. libgdft is built under HIP because
 # the molecular HF J/K path import-cascades through gpu4pyscf.dft.libxc, which
-# load_library('libgdft') at import; the DFT functional evaluation path itself
-# stays deferred (no external libxc).
+# load_library('libgdft') at import; DFT functional evaluation itself still
+# needs the external libxc, which is not built for ROCm.
 add_library(gdft SHARED
   nr_eval_gto.cu
   contract_rho.cu

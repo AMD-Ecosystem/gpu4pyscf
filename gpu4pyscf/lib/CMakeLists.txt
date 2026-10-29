@@ -185,20 +185,17 @@ add_subdirectory(gvhf)
 add_subdirectory(cupy_helper)
 add_subdirectory(gvhf-rys)
 add_subdirectory(gvhf-md)
-# The pinned base (#773, "Optimize J/K build for molecular code") routes the
-# molecular HF hcore and the scf/jk.py Schwarz-condition cache through the pbc
-# 1e-integral kernels (libpbc) and import-cascades through gpu4pyscf.dft.libxc
-# (libgdft), so even plain RHF get_jk needs libgecp, libgdft and libpbc in
-# addition to the J/K engine libraries. All three build under HIP; gdft and pbc
-# kernels are made wave-size correct alongside the gvhf-md J-engine fix.
+# The molecular HF hcore and the scf/jk.py Schwarz-condition cache go through
+# the pbc 1e-integral kernels (libpbc), and the import chain reaches
+# gpu4pyscf.dft.libxc (libgdft), so even plain RHF get_jk needs libgecp, libgdft
+# and libpbc in addition to the J/K engine libraries. All three build under HIP.
 add_subdirectory(ecp)
 add_subdirectory(gdft)
 add_subdirectory(pbc)
 
-# Milestone 1 of the ROCm/HIP port builds the integral / HF (J/K) libraries
-# plus the import-/runtime-coupled libgecp, libgdft and libpbc. The grouped-GEMM
-# (cupy_helper CUTLASS), external libxc functional library, DFT functional
-# evaluation, solvent, sem and multigrid are deferred to later milestones.
+# The ROCm build covers the integral / HF (J/K) libraries plus libgecp, libgdft
+# and libpbc. The CUTLASS grouped GEMM in cupy_helper, the external libxc
+# functional library, solvent, sem and multigrid are not built for ROCm yet.
 if(NOT USE_HIP)
   add_subdirectory(sem)
 

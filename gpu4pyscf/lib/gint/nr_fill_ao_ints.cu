@@ -117,9 +117,9 @@ static int GINTfill_int2e_tasks(ERITensor *eri, BasisProdOffsets *offsets, GINTE
 #ifndef USE_HIP
     // NROOTS 7/8 (h/i shells) instantiate a ~180-360 KB per-thread gout[] array.
     // On CUDA this lives in (cached) local memory; on gfx9xx it must fit the
-    // per-wave scratch frame (< 128 KB) and amdgcn-link rejects it. This legacy
-    // gint engine is deferred to a later milestone for l>=4 shells under ROCm;
-    // the modern gvhf-rys engine (used by the HF J/K path) has no such limit.
+    // per-wave scratch frame (< 128 KB) and amdgcn-link rejects it, so this
+    // legacy gint engine does not handle l>=4 shells on ROCm; the gvhf-rys
+    // engine (used by the HF J/K path) has no such limit.
     case 7: GINTfill_int2e_kernel<7, GOUTSIZE7> <<<blocks, threads, 0, stream>>>(*envs, *eri, *offsets); break;
     case 8: GINTfill_int2e_kernel<8, GOUTSIZE8> <<<blocks, threads, 0, stream>>>(*envs, *eri, *offsets); break;
 #endif

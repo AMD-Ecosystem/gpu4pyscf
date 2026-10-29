@@ -16,14 +16,12 @@ __version__ = '1.9.0'
 
 from . import _patch_pyscf
 
-# ROCm/HIP port -- Milestone 1 (HF / integrals). The DFT-dependent subpackages
-# (grad, hessian, solvent, dft, tdscf, nac) transitively load libgdft and the
-# CUTLASS grouped-GEMM kernels, neither of which is part of the HF / integral
-# milestone (gen_grids needs a HIP double3 rewrite; the XC functional path
-# needs libxc-HIP; grouped GEMM needs a hipBLAS/CK reimplementation). Importing
-# them here would fail at package import on ROCm, so under HIP only lib and scf
-# (the HF J/K path) are wired eagerly; the rest stay importable on demand once
-# their kernels are ported. On CUDA every subpackage is imported as before.
+# The ROCm build covers the HF / integral libraries. The DFT-dependent
+# subpackages (grad, hessian, solvent, dft, tdscf, nac) need the CUTLASS
+# grouped-GEMM kernels and the GPU libxc functional library, which the ROCm
+# build does not provide yet, so importing them here would fail at package
+# import. On ROCm only lib and scf (the HF J/K path) are imported eagerly; on
+# CUDA every subpackage is imported as before.
 import cupy as _cupy
 if getattr(_cupy.cuda.runtime, 'is_hip', False):
     from . import lib, scf

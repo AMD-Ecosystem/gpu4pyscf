@@ -122,7 +122,13 @@ while (1) {
         if (thread_id < sp_threads) {
             int count = img_counts[thread_id];
             for (int offset = sp_threads/2; offset > 0; offset /= 2) {
+#ifdef USE_HIP
+                // Threads 0..sp_threads-1 form one width-sp_threads segment on
+                // both wave sizes; HIP's __shfl_down_sync needs a 64-bit mask.
+                count = max(count, __shfl_down(count, offset, sp_threads));
+#else
                 count = max(count, __shfl_down_sync(sp_mask, count, offset));
+#endif
             }
             if (thread_id == 0) {
                 img_max = count;
@@ -292,7 +298,13 @@ while (1) {
             int ij = n*gout_stride + gout_id;
             if (ij >= nfij) break;
             for (int offset = nGv_per_block / 2; offset > 0; offset /= 2) {
+#ifdef USE_HIP
+                // Reduce within each nGv_per_block-lane segment (one pair's
+                // Gv points) on both wave sizes.
+                goutR[n] += __shfl_down(goutR[n], offset, nGv_per_block);
+#else
                 goutR[n] += __shfl_down_sync(mask, goutR[n], offset);
+#endif
             }
         }
 
@@ -410,7 +422,13 @@ while (1) {
         if (thread_id < sp_threads) {
             int count = img_counts[thread_id];
             for (int offset = sp_threads/2; offset > 0; offset /= 2) {
+#ifdef USE_HIP
+                // Threads 0..sp_threads-1 form one width-sp_threads segment on
+                // both wave sizes; HIP's __shfl_down_sync needs a 64-bit mask.
+                count = max(count, __shfl_down(count, offset, sp_threads));
+#else
                 count = max(count, __shfl_down_sync(sp_mask, count, offset));
+#endif
             }
             if (thread_id == 0) {
                 img_max = count;
@@ -642,7 +660,13 @@ while (1) {
             int ij = n*gout_stride + gout_id;
             if (ij >= nfij) break;
             for (int offset = nGv_per_block / 2; offset > 0; offset /= 2) {
+#ifdef USE_HIP
+                // Reduce within each nGv_per_block-lane segment (one pair's
+                // Gv points) on both wave sizes.
+                goutR[n] += __shfl_down(goutR[n], offset, nGv_per_block);
+#else
                 goutR[n] += __shfl_down_sync(mask, goutR[n], offset);
+#endif
             }
         }
 
