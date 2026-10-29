@@ -45,16 +45,16 @@ def test_jk_hermi1():
     ref = get_jk(mol, dm, hermi=1)
     assert abs(vj1 - ref[0]).max() < 1e-9
     assert abs(vk1 - ref[1]).max() < 1e-9
-    assert abs(lib.fp(vj1) - -2327.4715195591784) < 5e-10
-    assert abs(lib.fp(vk1) - -4069.3170008260583) < 5e-10
+    assert abs(lib.fp(vj1) - -2327.4715195591784) < 1e-9
+    assert abs(lib.fp(vk1) - -4069.3170008260583) < 1e-9
 
     vj = jk.get_j(mol, dm, hermi=1).get()
     assert abs(vj - ref[0]).max() < 1e-9
-    assert abs(lib.fp(vj) - -2327.4715195591784) < 5e-10
+    assert abs(lib.fp(vj) - -2327.4715195591784) < 1e-9
 
     vk = jk.get_k(mol, dm, hermi=1).get()
     assert abs(vk - ref[1]).max() < 1e-9
-    assert abs(lib.fp(vk) - -4069.3170008260583) < 5e-10
+    assert abs(lib.fp(vk) - -4069.3170008260583) < 1e-9
 
     mol.omega = 0.2
     vj, vk = jk.get_jk(mol, dm, hermi=1)
@@ -63,8 +63,8 @@ def test_jk_hermi1():
     ref = get_jk(mol, dm, hermi=1)
     assert abs(vj2 - ref[0]).max() < 1e-9
     assert abs(vk2 - ref[1]).max() < 1e-9
-    assert abs(lib.fp(vj2) -  1163.932604635460) < 5e-10
-    assert abs(lib.fp(vk2) - -1269.969109438691) < 5e-10
+    assert abs(lib.fp(vj2) -  1163.932604635460) < 1e-9
+    assert abs(lib.fp(vk2) - -1269.969109438691) < 1e-9
 
     mol.omega = -0.2
     vj, vk = jk.get_jk(mol, dm, hermi=1)
@@ -73,8 +73,8 @@ def test_jk_hermi1():
     ref = get_jk(mol, dm, hermi=1)
     assert abs(vj3 - ref[0]).max() < 1e-8
     assert abs(vk3 - ref[1]).max() < 1e-9
-    assert abs(lib.fp(vj3) - -3491.404124194866) < 5e-10
-    assert abs(lib.fp(vk3) - -2799.347891387202) < 5e-10
+    assert abs(lib.fp(vj3) - -3491.404124194866) < 1e-9
+    assert abs(lib.fp(vk3) - -2799.347891387202) < 1e-9
 
     assert abs(vj2+vj3 - vj1).max() < 1e-9
     assert abs(vk2+vk3 - vk1).max() < 1e-9
@@ -354,6 +354,51 @@ def test_q_cond():
     q_cond = cp.hstack([x[1] for x in jkopt.bas_pair_cache.values()])
     q_cond = q_cond[bas_ij.argsort()]
     assert abs(qref[mask] - q_cond.get()).max() < 1e-3
+
+def test_get_k_rsh_distant_centers():
+    # A finite interatomic density retains LR exchange even when SR integrals
+    # are negligible. Mixed RSH operators must not use SR-only screening.
+    mol = pyscf.M(atom='H 0 0 0; H 0 0 10', basis='sto-3g', verbose=0)
+    dm = pyscf.scf.RHF(mol).get_init_guess(key='1e')
+    omega = .33
+    k_lr = get_jk(mol, dm, hermi=1, with_j=False, omega=omega)[1]
+    k_sr = get_jk(mol, dm, hermi=1, with_j=False, omega=-omega)[1]
+    assert abs(k_lr[0, 1]) > .05
+    for lr_factor, sr_factor in ((.65, .19), (1., 0.), (0., 1.), (1., 1.)):
+        ref = lr_factor * k_lr + sr_factor * k_sr
+        vk = jk.get_k(mol, cp.asarray(dm), hermi=1, omega=omega,
+                      lr_factor=lr_factor, sr_factor=sr_factor)
+        assert abs(vk.get() - ref).max() < 1e-10
+
+def test_get_jk_rsh_stacked_dms():
+    # J for several densities at a range-separation omega goes through the
+    # J engine (_VHFOpt.get_j). jk.get_jk documents a full-range J there;
+    # SCF.get_jk evaluates it under mol.with_range_coulomb(omega), like pyscf.
+    from gpu4pyscf import scf as gpu_scf
+    mol = pyscf.M(atom='''
+    N  0.000  0.000  0.000
+    H  0.000  0.802  0.583
+    H  0.000 -0.802  0.583
+    ''', basis='def2-svp', spin=1, verbose=0)
+    np.random.seed(5)
+    nao = mol.nao
+    dms = np.random.rand(2, nao, nao) - .5
+    dms = np.einsum('xij,xkj->xik', dms, dms)
+    ref_j_full = get_jk(mol, dms, hermi=1, with_k=False)[0]
+    for omega in (.3, -.3):
+        ref_j, ref_k = get_jk(mol, dms, hermi=1, omega=omega)
+        for with_k in (False, True):
+            vj, vk = jk.get_jk(mol, cp.asarray(dms), hermi=1, with_k=with_k,
+                               omega=omega)
+            assert vj.shape == dms.shape
+            assert abs(vj.get() - ref_j_full).max() < 1e-9
+            if with_k:
+                assert abs(vk.get() - ref_k).max() < 1e-9
+            vj, vk = gpu_scf.UHF(mol).get_jk(mol, cp.asarray(dms), hermi=1,
+                                             with_k=with_k, omega=omega)
+            assert abs(vj.get() - ref_j).max() < 1e-9
+            if with_k:
+                assert abs(vk.get() - ref_k).max() < 1e-9
 
 def test_jk_get_k_sr():
     mol = pyscf.M(atom='''

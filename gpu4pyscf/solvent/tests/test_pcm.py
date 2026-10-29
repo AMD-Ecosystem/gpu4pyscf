@@ -18,7 +18,7 @@ import pyscf
 import pytest
 import cupy
 from pyscf import gto
-from gpu4pyscf import scf, dft
+from gpu4pyscf import scf, dft, solvent
 from gpu4pyscf.solvent import pcm
 
 def setUpModule():
@@ -266,6 +266,153 @@ H    0.000000   -0.935307   -1.082500
         ref_energy = -204.4722728963
 
         assert abs(test_energy - ref_energy) < 1e-8
+
+    def test_ghost_atom(self):
+        mol = pyscf.M(
+            atom = """
+                ghost:O      -0.0456482954     0.3276635601     0.1150712045
+                ghost:H       0.8839023862     0.1379773801     0.1537324880
+                ghost:H      -0.4544197433    -0.3524420751     0.6270142868
+                O       2.8650684263    -0.1847028876     0.0859519520
+                H       3.1198758203    -0.2809098055    -0.8201356074
+                H       3.3367304058     0.5708588279     0.4048656762
+                ghost:Ne     100 0 0
+            """,
+            basis = "def2-SVP",
+            verbose = 0,
+        )
+        mf = scf.RHF(mol)
+        mf = mf.PCM()
+        mf.with_solvent.method = "IEF-PCM"
+        mf.with_solvent.eps = 80.0
+        mf.conv_tol = 1e-12
+
+        test_energy = mf.kernel()
+        assert mf.converged
+
+        gobj = mf.Gradients()
+        gobj.grid_response = True
+        test_gradient = gobj.kernel()
+
+        ### Q-Chem reference input
+        # $molecule
+        # 0 1
+        #         @O      -0.0456482954     0.3276635601     0.1150712045
+        #         @H       0.8839023862     0.1379773801     0.1537324880
+        #         @H      -0.4544197433    -0.3524420751     0.6270142868
+        #         O       2.8650684263    -0.1847028876     0.0859519520
+        #         H       3.1198758203    -0.2809098055    -0.8201356074
+        #         H       3.3367304058     0.5708588279     0.4048656762
+        # $end
+
+        # $rem
+        # JOBTYPE freq
+        # METHOD HF
+        # BASIS def2-svp
+        # SCF_CONVERGENCE 12
+        # BASIS_LIN_DEP_THRESH 6
+        # SOLVENT_METHOD PCM
+        # SYMMETRY      FALSE
+        # SYM_IGNORE    TRUE
+        # MAX_SCF_CYCLES 100
+        # PURECART 1111
+        # THRESH        14
+        # $end
+        ref_energy = -75.9747732340
+
+        ref_gradient = numpy.array([
+            [-0.000112,      -0.000008,      -0.000007],
+            [-0.000936,      -0.000017,       0.000188],
+            [-0.000051,      -0.000021,       0.000016],
+            [ 0.003634,       0.003660,      -0.003067],
+            [-0.001186,      -0.001495,       0.001833],
+            [-0.001350,      -0.002120,       0.001037],
+            [0, 0, 0],
+        ])
+
+        assert abs(test_energy - ref_energy) < 1e-9
+        assert numpy.max(numpy.abs(test_gradient - ref_gradient)) < 2e-6
+
+    def test_damping_with_solvent(self):  # issue #939
+        for mf in (scf.RHF(mol).PCM(), scf.UHF(mol).PCM()):
+            dm = mf.get_init_guess()
+            h1e, s1e = mf.get_hcore(), mf.get_ovlp()
+            vhf = mf.get_veff(mol, dm)
+            f = mf.get_fock(h1e, s1e, vhf, dm)
+            f_last = f + 0.05 * cupy.eye(f.shape[-1])
+            f_damped = mf.get_fock(h1e, s1e, vhf, dm, cycle=0, diis_start_cycle=10,
+                                   damp_factor=0.6, fock_last=f_last)
+            assert abs(f_damped - (0.4 * f + 0.6 * f_last)).max() < 1e-10
+
+class NamedSolvent(unittest.TestCase):
+    def test_solvent_name(self):
+        # issue #3413
+        cm = pcm.PCM(mol, 'toluene')
+        self.assertEqual(cm.solvent, 'toluene')
+        self.assertAlmostEqual(cm.get_eps(), 2.3741, 12)
+        self.assertAlmostEqual(cm.get_eps_optical(), 1.4961**2, 12)
+
+    def test_default_solvent(self):
+        cm = pcm.PCM(mol)
+        self.assertEqual(cm.solvent, '')
+        self.assertAlmostEqual(cm.get_eps(), 78.3553, 12)
+        self.assertIsNone(cm.eps_optical)
+
+    def test_water_matches_default_eps(self):
+        # Naming water must not change eps away from the default
+        cm = pcm.PCM(mol, 'water')
+        self.assertAlmostEqual(cm.get_eps(), pcm.EPS_WATER, 12)
+
+    def test_assign_solvent(self):
+        cm = pcm.PCM(mol)
+        cm.solvent = 'acetonitrile'
+        self.assertAlmostEqual(cm.get_eps(), 35.688, 12)
+        self.assertAlmostEqual(cm.get_eps_optical(), 1.3442**2, 12)
+        cm.eps = 35.9
+        self.assertAlmostEqual(cm.get_eps(), 35.9, 12)
+        self.assertEqual(cm.solvent, 'acetonitrile')
+
+    def test_solvent_name_matching(self):
+        for name, ref in (('Water', 'water'),
+                          ('DMSO', 'dimethylsulfoxide'),
+                          ('thf', 'tetrahydrofuran'),
+                          ('hexane', 'n-hexane'),
+                          ('N,N-DiMethylFormamide', 'N,N-dimethylformamide'),
+                          ('carbontetrachloride', 'carbon tetrachloride')):
+            self.assertEqual(pcm.PCM(mol, name).solvent, ref)
+
+    def test_unknown_solvent(self):
+        self.assertRaises(RuntimeError, pcm.PCM, mol, 'unobtainium')
+
+    def test_solvent_energy(self):
+        cm = pcm.PCM(mol, 'acetonitrile')
+        cm.lebedev_order = 29
+        e_tot = scf.RHF(mol).PCM(cm).kernel()
+
+        cm_ref = pcm.PCM(mol)
+        cm_ref.eps = 35.688
+        cm_ref.lebedev_order = 29
+        e_ref = scf.RHF(mol).PCM(cm_ref).kernel()
+        self.assertAlmostEqual(e_tot, e_ref, 12)
+
+    def test_solvent_name_in_constructor(self):
+        e_tot = scf.RHF(mol).PCM('acetonitrile').kernel()
+        e_ref = scf.RHF(mol).PCM(pcm.PCM(mol, 'acetonitrile')).kernel()
+        self.assertAlmostEqual(e_tot, e_ref, 12)
+        e_ref = solvent.PCM(scf.RHF(mol), 'acetonitrile').kernel()
+        self.assertAlmostEqual(e_tot, e_ref, 12)
+
+    def test_solvent_updated_after_build(self):
+        cm = pcm.PCM(mol, 'water')
+        cm.build()
+        f_epsilon = cm._intermediates['f_epsilon']
+        cm.solvent = 'toluene'
+        # The intermediates were computed for water. They have to be discarded.
+        self.assertFalse(cm._intermediates)
+        cm.build()
+        self.assertNotAlmostEqual(cm._intermediates['f_epsilon'], f_epsilon, 6)
+        eps = cm.get_eps()
+        self.assertAlmostEqual(cm._intermediates['f_epsilon'], (eps-1)/eps, 12)
 
 if __name__ == "__main__":
     print("Full Tests for PCMs")

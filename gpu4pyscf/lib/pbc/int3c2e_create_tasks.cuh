@@ -19,10 +19,15 @@
 #include <stdlib.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <cub/cub.cuh>
 
 #define THREADS         256
+// WARP_SIZE: compile-time constant used for shared-memory sizing.
+// `warpSize` (HIP/CUDA device-runtime built-in) is not constexpr,
+// so we keep a literal here. Guarded so the build can override
+// it (e.g. -DWARP_SIZE=64) for future wider-wavefront targets.
+#ifndef WARP_SIZE
 #define WARP_SIZE       32
+#endif
 #define WARPS           8
 #define LMAX            4
 #define LMAX1           (LMAX+1)
@@ -48,10 +53,29 @@ typedef struct {
     float zizk;
 } ShellTripletTaskInfo;
 
+// np.where(threads_mask)[0]
+__device__ inline
+int mask_to_index(int keep, int *tmp_storage, int threads, int t_id)
+{
+    tmp_storage[t_id] = keep;
+    __syncthreads();
+    for (int offset = 1; offset < threads; offset <<= 1) {
+        int val = 0;
+        if (t_id >= offset) {
+            val = tmp_storage[t_id - offset];
+        }
+        __syncthreads();
+        tmp_storage[t_id] += val;
+        __syncthreads();
+    }
+    int offset = tmp_storage[t_id] - keep;
+    return offset;
+}
+
 __device__ inline
 void initialize_ijk_tasks(uint32_t *img_pool, uint32_t *rem_task_idx,
                           ShellTripletTaskInfo *ijk_tasks_info,
-                          PBCIntEnvVars &envs, int shl_pair0, int shl_pair1,
+                          double omega, PBCIntEnvVars &envs, int shl_pair0, int shl_pair1,
                           int ksh0_cell0, int ksh1_cell0, int li, int lj, int lk, int nauxbas,
                           uint32_t *bas_ij_idx, int *img_idx, uint32_t *sp_img_offsets,
                           float *diffuse_exps, float *diffuse_coefs, float log_cutoff)
@@ -61,7 +85,6 @@ void initialize_ijk_tasks(uint32_t *img_pool, uint32_t *rem_task_idx,
     int bvk_nbas = envs.nbas * ncells;
     int *bas = envs.bas;
     double *env = envs.env;
-    float omega = env[PTR_RANGE_OMEGA];
     if (omega == 0) {
         omega = 0.1f;
     }
@@ -164,7 +187,7 @@ void initialize_ijk_tasks(uint32_t *img_pool, uint32_t *rem_task_idx,
 
 __device__ inline
 void _filter_ijk_tasks(uint32_t *rem_task_idx, int& num_ijk_tasks,
-                       ShellTripletTaskInfo *ijk_tasks_info)
+                       ShellTripletTaskInfo *ijk_tasks_info, int *swap)
 {
     int thread_id = threadIdx.x;
     int tot_tasks = num_ijk_tasks;
@@ -172,11 +195,7 @@ void _filter_ijk_tasks(uint32_t *rem_task_idx, int& num_ijk_tasks,
     if (thread_id == 0) {
         num_ijk_tasks = 0;
     }
-    using BlockScan = cub::BlockScan<int, THREADS>;
-    __shared__ typename BlockScan::TempStorage temp_storage;
-
-    for (int base = 0; base < tot_tasks; base += THREADS) {
-        int task_id = base + thread_id;
+    for (int task_id = thread_id; task_id < tot_tasks+thread_id; task_id += THREADS) {
         register int ijk_id = 0;
         int keep = 0;
         if (task_id < tot_tasks) {
@@ -184,17 +203,15 @@ void _filter_ijk_tasks(uint32_t *rem_task_idx, int& num_ijk_tasks,
             keep = ijk_tasks_info[ijk_id].remaining_imgs > 0;
         }
 
-        int prefix, block_total;
-        BlockScan(temp_storage).ExclusiveSum(keep, prefix, block_total);
-        __syncthreads();  // required before reusing temp_storage
-
+        int offset = mask_to_index(keep, swap, THREADS, thread_id);
         if (keep) {
-            rem_task_idx[num_ijk_tasks + prefix] = ijk_id;
+            rem_task_idx[num_ijk_tasks + offset] = ijk_id;
         }
         __syncthreads();
         if (thread_id == 0) {
-            num_ijk_tasks += block_total;
+            num_ijk_tasks += swap[THREADS - 1];
         }
+        __syncthreads();
     }
     __syncthreads();
 }
@@ -203,7 +220,7 @@ __device__ inline
 void _select_sub_ijk(uint32_t *sub_task_idx, int &num_sub_tasks,
                      int& img_not_processed, int& img_tile_size,
                      uint32_t *rem_task_idx, int num_ijk_tasks,
-                     ShellTripletTaskInfo *ijk_tasks_info)
+                     ShellTripletTaskInfo *ijk_tasks_info, int *swap)
 {
     int thread_id = threadIdx.x;
     __syncthreads();
@@ -216,11 +233,7 @@ void _select_sub_ijk(uint32_t *sub_task_idx, int &num_sub_tasks,
     }
     __syncthreads();
 
-    using BlockScan = cub::BlockScan<int, THREADS>;
-    __shared__ typename BlockScan::TempStorage temp_storage;
-
-    for (int base = 0; base < num_ijk_tasks; base += THREADS) {
-        int task_id = base + thread_id;
+    for (int task_id = thread_id; task_id < num_ijk_tasks+thread_id; task_id += THREADS) {
         register int ijk_id = 0;
         int keep = 0;
         int img_count = 0;
@@ -230,18 +243,16 @@ void _select_sub_ijk(uint32_t *sub_task_idx, int &num_sub_tasks,
             keep = img_count >= img_tile_size;
         }
 
-        int prefix, block_total;
-        BlockScan(temp_storage).ExclusiveSum(keep, prefix, block_total);
-        __syncthreads();  // required before reusing temp_storage
-
+        int offset = mask_to_index(keep, swap, THREADS, thread_id);
         if (keep) {
-            sub_task_idx[num_sub_tasks + prefix] = ijk_id;
+            sub_task_idx[num_sub_tasks + offset] = ijk_id;
             ijk_tasks_info[ijk_id].img_count = img_count - img_tile_size;
         }
         __syncthreads();
         if (thread_id == 0) {
-            num_sub_tasks += block_total;
+            num_sub_tasks += swap[THREADS - 1];
         }
+        __syncthreads();
     }
     __syncthreads();
 }

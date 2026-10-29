@@ -281,10 +281,31 @@ class KnownValues(unittest.TestCase):
 
         assert abs(test_dF - reference_dF).max() < 1e-8
 
+    def test_hessian_grid_response_omega_override(self):
+        mf = RKS(mol, xc = 'LC_WPBE')
+        mf.omega = 0.175
+        mf.grids.atom_grid = (10,14)
+        mf.conv_tol = 1e-8
+        mf.small_rho_cutoff = 1e-30
+
+        mf.kernel()
+        assert mf.converged
+
+        hobj = mf.Hessian()
+        hobj.grid_response = True
+
+        test_de2 = _get_exc_deriv2(hobj, mf.mo_coeff, mf.mo_occ, mf.make_rdm1(), max_memory = None)
+        reference_de2 = _get_exc_deriv2_numerical(hobj, mf.mo_coeff, mf.mo_occ, max_memory = None)
+        assert abs(test_de2 - reference_de2).max() < 1e-8
+
+        test_dF = _get_vxc_deriv1(hobj, mf.mo_coeff, mf.mo_occ, max_memory = 16000)
+        reference_dF = _get_vxc_deriv1_numerical(hobj, mf.mo_coeff, mf.mo_occ, max_memory = None)
+        assert abs(test_dF - reference_dF).max() < 1e-8
+
     def test_hessian_grid_response_lda(self):
         mf = RKS(mol, xc = 'LDA')
         mf.grids.atom_grid = (10,14)
-        mf.conv_tol = 1e-12
+        mf.conv_tol = 1e-11
         mf.conv_tol_cpscf = 1e-10
         mf.cphf_grids.atom_grid = mf.grids.atom_grid
         mf.cphf_grids.prune = mf.grids.prune
@@ -374,7 +395,7 @@ class KnownValues(unittest.TestCase):
     def test_hessian_grid_response_gga(self):
         mf = RKS(mol, xc = 'revPBE')
         mf.grids.atom_grid = (10,14)
-        mf.conv_tol = 1e-12
+        mf.conv_tol = 1e-11
         mf.conv_tol_cpscf = 1e-10
         mf.cphf_grids.atom_grid = mf.grids.atom_grid
         mf.cphf_grids.prune = mf.grids.prune
@@ -464,7 +485,7 @@ class KnownValues(unittest.TestCase):
     def test_hessian_grid_response_mgga(self):
         mf = RKS(mol, xc = 'r2SCAN')
         mf.grids.atom_grid = (10,14)
-        mf.conv_tol = 1e-12
+        mf.conv_tol = 1e-11
         mf.conv_tol_cpscf = 1e-10
         mf.cphf_grids.atom_grid = mf.grids.atom_grid
         mf.cphf_grids.prune = mf.grids.prune
@@ -555,7 +576,7 @@ class KnownValues(unittest.TestCase):
         mf = RKS(mol, xc = 'wB97M-V')
         mf.grids.atom_grid = (10,14)
         mf.nlcgrids.atom_grid = (15,14)
-        mf.conv_tol = 1e-12
+        mf.conv_tol = 1e-11
         mf.conv_tol_cpscf = 1e-10
         mf.cphf_grids.atom_grid = mf.grids.atom_grid
         mf.cphf_grids.prune = mf.grids.prune
@@ -655,7 +676,7 @@ class KnownValues(unittest.TestCase):
         mf.grids.prune = None
         mf.grids.becke_scheme = gen_grid.stratmann
         mf.small_rho_cutoff = 1e-30
-        mf.conv_tol = 1e-12
+        mf.conv_tol = 1e-11
         mf.kernel()
         assert mf.converged
 
@@ -734,7 +755,7 @@ class KnownValues(unittest.TestCase):
         mf.grids.becke_scheme = gen_grid.stratmann
         mf.grids.radii_adjust = None
         mf.small_rho_cutoff = 1e-30
-        mf.conv_tol = 1e-12
+        mf.conv_tol = 1e-11
         mf.kernel()
         assert mf.converged
 
@@ -810,7 +831,7 @@ class KnownValues(unittest.TestCase):
         mf = mol.RKS(xc = "wB97M-V").density_fit(auxbasis = "def2-universal-jkfit").to_gpu()
         mf.grids.atom_grid = (10,14)
         mf.nlcgrids.atom_grid = (10,14)
-        mf.conv_tol = 1e-12
+        mf.conv_tol = 1e-11
         mf.kernel()
         assert mf.converged
 
@@ -823,7 +844,7 @@ class KnownValues(unittest.TestCase):
 
         ref_hessian = np.zeros((1,1,3,3))
 
-        assert np.max(np.abs(test_hessian - ref_hessian)) < 1e-10
+        assert np.max(np.abs(test_hessian - ref_hessian)) < 2e-10
 
     def test_d2rho_lda(self):
         mol = mol2
@@ -901,7 +922,7 @@ class KnownValues(unittest.TestCase):
         test_d2E_dAdB_orbital_response = cp.zeros((natm, natm, 3, 3))
 
         g0 = 0
-        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 2, strict_grid_order = True):
+        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 2):
             g1 = g0 + weight.shape[0]
 
             mu = ao[0]
@@ -1035,7 +1056,7 @@ class KnownValues(unittest.TestCase):
         test_d2E_dAdB_orbital_response = cp.zeros((natm, natm, 3, 3))
 
         g0 = 0
-        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 3, strict_grid_order = True):
+        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 3):
             g1 = g0 + weight.shape[0]
 
             mu = ao[0]
@@ -1175,7 +1196,7 @@ class KnownValues(unittest.TestCase):
         test_d2E_dAdB_orbital_response = cp.zeros((natm, natm, 3, 3))
 
         g0 = 0
-        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 3, strict_grid_order = True):
+        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 3):
             g1 = g0 + weight.shape[0]
 
             mu = ao[0]

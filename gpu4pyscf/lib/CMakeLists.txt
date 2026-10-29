@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required (VERSION 3.19 FATAL_ERROR) # 3.19 is required by cutlass
+cmake_minimum_required (VERSION 3.21 FATAL_ERROR) # Required by Libxc 7.1.2
 
 # ROCm/HIP port. Under USE_HIP the .cu sources are retagged
 # LANGUAGE HIP and compiled by the HIP toolchain; the single compat header
@@ -28,7 +28,7 @@ if(USE_HIP)
   endif()
   message("HIP_ARCHITECTURES: ${CMAKE_HIP_ARCHITECTURES}")
 else()
-  project (gpu4pyscf C CXX CUDA Fortran)
+  project (gpu4pyscf C CXX Fortran)
 endif()
 
 set(CMAKE_C_STANDARD "99")
@@ -57,12 +57,16 @@ if(USE_HIP)
   include_directories(BEFORE ${PROJECT_SOURCE_DIR}/hip_compat)
 endif()
 
+# Set architectures before enabling CUDA, which otherwise initializes its own default.
 # For better performance on A100, the option
 # -DCUDA_ARCHITECTURES="70-real;80-real" can be added to cmake command
 if(DEFINED CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES "${CUDA_ARCHITECTURES}")
-elseif(NOT USE_HIP)
+elseif(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES "70-real;80-real;90-real")
+endif()
+if(NOT USE_HIP)
+  enable_language(CUDA)
 endif()
 message("CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
 
@@ -152,6 +156,9 @@ function(g4p_set_hip_language target)
   endif()
 endfunction()
 
+option(ENABLE_MULTIGRID_V2 "Enable multigrid-v2 kernels" ON)
+option(ENABLE_FP32_MULTIGRID "Enable experimental FP32 multigrid-v2 collocation kernels" OFF)
+
 if(USE_HIP)
   option(BUILD_CUTLASS "Using cutlass" OFF)
 else()
@@ -161,7 +168,7 @@ if(BUILD_CUTLASS)
   include(ExternalProject)
   ExternalProject_Add(cutlass
     GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
-    GIT_TAG        v3.4.0
+    GIT_TAG        v3.6.0
     CONFIGURE_COMMAND ""  # No configure step
     BUILD_COMMAND ""      # No build step
     INSTALL_COMMAND ""    # No install step
@@ -211,14 +218,13 @@ endif()
 if(BUILD_LIBXC)
   include(ExternalProject)
   ExternalProject_Add(libxc
-    GIT_REPOSITORY https://github.com/wxj6000/libxc.git
-    GIT_TAG b225c254c063e1de835a4425115c9a6377478b32
-    PATCH_COMMAND git apply --reject ${PROJECT_SOURCE_DIR}/libxc_prune.patch || true
+    URL https://gitlab.com/libxc/libxc/-/archive/7.1.2/libxc-7.1.2.tar.gz
+    PATCH_COMMAND patch -p1 --batch --forward -i ${PROJECT_SOURCE_DIR}/libxc_prune.patch
     PREFIX ${PROJECT_BINARY_DIR}/deps
     INSTALL_DIR ${PROJECT_SOURCE_DIR}/deps
     CMAKE_ARGS -DBUILD_SHARED_LIBS=ON -DENABLE_CUDA=ON
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-            -DENABLE_FORTRAN=OFF -DDISABLE_KXC=OFF -DDISABLE_LXC=ON -DDISABLE_FHC=ON
+            -DBUILD_TESTING=OFF -DENABLE_FORTRAN=OFF
+            -DMAXORDER=3 -DDISABLE_FHC=ON
             -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
             -DCMAKE_INSTALL_LIBDIR:PATH=lib
             -DCMAKE_C_CREATE_SHARED_LIBRARY=${C_LINK_TEMPLATE}

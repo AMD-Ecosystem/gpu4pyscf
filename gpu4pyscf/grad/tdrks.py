@@ -16,7 +16,7 @@
 from functools import reduce
 import cupy as cp
 import numpy as np
-from pyscf import lib
+from pyscf import lib, gto
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.cupy_helper import contract, add_sparse, tag_array
 from gpu4pyscf.df import int3c2e
@@ -245,7 +245,8 @@ def grad_elec(td_grad, x_y, singlet=True, atmlst=None, verbose=logger.INFO,
 
     dh1e_ground_and_td = int3c2e.get_dh1e(mol, dm_correlated)  # 1/r like terms
     if len(mol._ecpbas) > 0:
-        dh1e_ground_and_td += rhf_grad.get_dh1e_ecp(mol, dm_correlated)  # 1/r like terms
+        ecp_atoms = np.unique(mol._ecpbas[:, gto.ATOM_OF])
+        dh1e_ground_and_td[ecp_atoms] += rhf_grad.get_dh1e_ecp(mol, dm_correlated)  # 1/r like terms
 
     if mol._pseudo:
         raise NotImplementedError("Pseudopotential gradient not supported for molecular system yet")
@@ -386,20 +387,7 @@ def _contract_xc_kernel(td_grad, xc_code, dmvo, dmoo=None,
                 ao0 = ao
             mo_coeff_mask = mo_coeff[mask, :]
             rho = ni.eval_rho2(_sorted_mol, ao0, mo_coeff_mask, mo_occ, mask, xctype, with_lapl=False)
-            # quick fix
-            if deriv > 2:
-                whether_use_gpu = os.environ.get('LIBXC_ON_GPU', '0') == '1'
-                if not whether_use_gpu:
-                    ni_cpu = numint_cpu()
-                    # TODO: If the libxc is stablized, this should be gpulized
-                    vxc, fxc, kxc = ni_cpu.eval_xc_eff(xc_code, rho.get(), deriv, xctype=xctype)[1:]
-                    if isinstance(vxc,np.ndarray): vxc = cp.asarray(vxc)
-                    if isinstance(fxc,np.ndarray): fxc = cp.asarray(fxc)
-                    if isinstance(kxc,np.ndarray): kxc = cp.asarray(kxc)
-                else:
-                    vxc, fxc, kxc = ni.eval_xc_eff(xc_code, rho, deriv, xctype=xctype)[1:]
-            else:
-                vxc, fxc, kxc = ni.eval_xc_eff(xc_code, rho, deriv, xctype=xctype)[1:]
+            vxc, fxc, kxc = ni.eval_xc_eff(xc_code, rho, deriv, xctype=xctype, spin=0)[1:]
             dmvo_mask = dmvo[mask[:, None], mask]
             rho1 = (
                 ni.eval_rho(_sorted_mol, ao0, dmvo_mask, mask, xctype, hermi=1, with_lapl=False) * 2
@@ -451,16 +439,7 @@ def _contract_xc_kernel(td_grad, xc_code, dmvo, dmoo=None,
             rho = ni.eval_rho2(_sorted_mol, ao0, mo_coeff_mask, mo_occ, mask, xctype, with_lapl=False)
             rho *= 0.5
             rho = cp.repeat(rho[cp.newaxis], 2, axis=0)
-            # quick fix
-            # if deriv > 2:
-            #     ni_cpu = numint_cpu()
-            #     vxc, fxc, kxc = ni_cpu.eval_xc_eff(xc_code, rho.get(), deriv, xctype=xctype)[1:]
-            #     if isinstance(vxc,np.ndarray): vxc = cp.asarray(vxc)
-            #     if isinstance(fxc,np.ndarray): fxc = cp.asarray(fxc)
-            #     if isinstance(kxc,np.ndarray): kxc = cp.asarray(kxc)
-            # else:
-            #     vxc, fxc, kxc = ni.eval_xc_eff(xc_code, rho, deriv, xctype=xctype)[1:]
-            vxc, fxc, kxc = ni.eval_xc_eff(xc_code, rho, deriv, xctype=xctype)[1:]
+            vxc, fxc, kxc = ni.eval_xc_eff(xc_code, rho, deriv, xctype=xctype, spin=1)[1:]
             # fxc_t couples triplet excitation amplitudes
             # 1/2 int (tia - tIA) fxc (tjb - tJB) = tia fxc_t tjb
             fxc_t = fxc[:, :, 0] - fxc[:, :, 1]

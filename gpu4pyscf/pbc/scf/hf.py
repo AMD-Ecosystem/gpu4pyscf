@@ -24,13 +24,17 @@ import numpy as np
 import cupy as cp
 from pyscf import lib
 from pyscf.pbc.scf import hf as hf_cpu
-from pyscf.pbc import tools
 from gpu4pyscf.lib import logger, utils
-from gpu4pyscf.lib.cupy_helper import return_cupy_array, contract
+from gpu4pyscf.lib.cupy_helper import return_cupy_array, contract, get_avail_mem
 from gpu4pyscf.scf import hf as mol_hf
 from gpu4pyscf.pbc import df
 from gpu4pyscf.pbc.gto import int1e
 from gpu4pyscf.pbc.scf.smearing import smearing
+from gpu4pyscf.pbc import tools
+from gpu4pyscf.__config__ import props as gpu_specs
+
+# 8 for 8 bytes per fp64, 10 is arbitrary (A 80 GB gpu will allow 1000^3 mesh)
+ALLOWED_FFT_MESH_SIZE = gpu_specs['totalGlobalMem'] // 8 // 10
 
 def get_bands(mf, kpts_band, cell=None, dm=None, kpt=None):
     '''Get energy bands at the given (arbitrary) 'band' k-points.
@@ -49,7 +53,7 @@ def get_bands(mf, kpts_band, cell=None, dm=None, kpt=None):
     single_kpt_band = (getattr(kpts_band, 'ndim', None) == 1)
     kpts_band = kpts_band.reshape(-1,3)
 
-    fock = cp.asarray(mf.get_veff(cell, dm, kpt=kpt, kpts_band=kpts_band))
+    fock = mf.get_veff(cell, dm, kpt=kpt, kpts_band=kpts_band)
     fock += mf.get_hcore(cell, kpts_band)
     s1e = mf.get_ovlp(cell, kpts_band)
     mo_energy, mo_coeff = eigh_with_canonical_orth(fock, s1e)
@@ -88,7 +92,7 @@ def get_rho(mf, dm=None, grids=None, kpt=None):
     '''Compute density in real space
     '''
     from gpu4pyscf.pbc.dft import UniformGrids
-    from gpu4pyscf.pbc.dft import numint, multigrid, multigrid_v2
+    from gpu4pyscf.pbc.dft import numint, multigrid
     if dm is None:
         dm = mf.make_rdm1()
     if getattr(dm, 'ndim', None) != 2:  # UHF
@@ -99,7 +103,7 @@ def get_rho(mf, dm=None, grids=None, kpt=None):
     ni = mf._numint
     if ni is None:
         ni = numint.NumInt()
-    if isinstance(ni, (multigrid.MultiGridNumInt, multigrid_v2.MultiGridNumInt)):
+    if isinstance(ni, multigrid.MultiGridNumIntBase):
         assert grids is None or isinstance(grids, UniformGrids)
         if grids is not None and any(grids.mesh != ni.mesh):
             ni = ni.copy().reset()
@@ -193,7 +197,7 @@ class SCF(mol_hf.SCF):
         cell = self.cell
         if ((cell.dimension >= 2 and cell.low_dim_ft_type != 'inf_vacuum') and
             isinstance(self.exxdiv, str) and self.exxdiv.lower() == 'ewald'):
-            madelung = tools.pbc.madelung(cell, self.kpt[None])
+            madelung = tools.pbc.madelung(cell)
             log.info('    madelung (= occupied orbital energy shift) = %s', madelung)
             log.info('    Total energy shift due to Ewald probe charge'
                      ' = -1/2 * Nelec*madelung = %.12g',
@@ -210,9 +214,13 @@ class SCF(mol_hf.SCF):
         if 'kpt' in self.__dict__:
             self.kpt = self.__dict__.pop('kpt')
 
-        if self._numint is None:
-            from gpu4pyscf.pbc.dft import multigrid_v2
-            self._numint = multigrid_v2.MultiGridNumInt(self.cell)
+        # FFTDF.get_j is identical to MultiGridNumInt.get_j method.
+        # By initializing self._numint, get_j and get_hcore will use the
+        # MultiGridNumInt integrator to evaluate Coulomb integrals, skipping the
+        # self.with_df code path.
+        if isinstance(self.with_df, df.FFTDF) and self._numint is None:
+            from gpu4pyscf.pbc.dft import multigrid_v3
+            self._numint = multigrid_v3.MultiGridNumInt(self.cell)
 
         if self.verbose >= logger.WARN:
             self.check_sanity()
@@ -230,11 +238,16 @@ class SCF(mol_hf.SCF):
         return int1e.int1e_ovlp(cell, kpt)
 
     def get_hcore(self, cell=None, kpt=None):
-        from gpu4pyscf.pbc.dft import multigrid, multigrid_v2
+        from gpu4pyscf.pbc.dft import multigrid, multigrid_v3
         if cell is None: cell = self.cell
         if kpt is None: kpt = self.kpt
-        if isinstance(self._numint, (multigrid.MultiGridNumInt, multigrid_v2.MultiGridNumInt)):
+
+        if isinstance(self._numint, multigrid.MultiGridNumIntBase):
             ni = self._numint
+        elif np.prod(cell.mesh) < ALLOWED_FFT_MESH_SIZE:
+            # In the pseudo and all-electron mixed case, MultiGridNumInt is
+            # still more efficient if Ecut is not too high.
+            ni = multigrid_v3.MultiGridNumInt(cell)
         else:
             ni = self.with_df
         if cell.pseudo:
@@ -316,10 +329,7 @@ class SCF(mol_hf.SCF):
         '''Hartree-Fock potential matrix for the given density matrix.
         See :func:`scf.hf.get_veff` and :func:`scf.hf.RHF.get_veff`
         '''
-        from gpu4pyscf.pbc.scf.khf import KRHF
-        if dm is None: dm = self.make_rdm1()
-        if kpt is None: kpt = self.kpt
-        return KRHF.get_veff(self, cell, dm, dm_last, vhf_last, hermi, kpt, kpts_band)
+        raise NotImplementedError
 
     def energy_nuc(self):
         cell = self.cell
@@ -327,11 +337,7 @@ class SCF(mol_hf.SCF):
             raise NotImplementedError
         return cell.enuc
 
-    def get_init_guess(self, cell=None, key='minao', s1e=None):
-        if cell is None: cell = self.cell
-        dm = mol_hf.SCF.get_init_guess(self, cell, key)
-        dm = normalize_dm_(self, dm, s1e)
-        return dm
+    get_init_guess = NotImplemented
 
     # hf_cpu.SCF.init_guess_by_1e calls additional checks. Enabling the
     # following line to enable this.
@@ -346,6 +352,7 @@ class SCF(mol_hf.SCF):
     spin_square = NotImplemented
     dip_moment = NotImplemented
     Gradients = NotImplemented
+    gen_response = NotImplemented
     smearing = smearing
 
     def nuc_grad_method(self):
@@ -356,8 +363,8 @@ class SCF(mol_hf.SCF):
         raise NotImplementedError
 
     def dump_chk(self, envs):
-        mol_hf.SCF.dump_chk(self, envs)
         if self.chkfile:
+            mol_hf.SCF.dump_chk(self, envs)
             with lib.H5FileWrap(self.chkfile, 'a') as fh5:
                 fh5['scf/kpt'] = self.kpt
         return self
@@ -380,6 +387,24 @@ class KohnShamDFT:
 class RHF(SCF):
 
     energy_elec = mol_hf.RHF.energy_elec
+    newton = mol_hf.RHF.newton
+    canonicalize = mol_hf.RHF.canonicalize
+
+    init_guess_by_minao = mol_hf.RHF.init_guess_by_minao
+    init_guess_by_atom = mol_hf.RHF.init_guess_by_atom
+
+    def get_init_guess(self, cell=None, key='minao', s1e=None):
+        assert isinstance(key, str)
+        if cell is None: cell = self.cell
+        dm = mol_hf.RHF.get_init_guess(self, cell, key)
+        return normalize_dm_(self, dm, s1e)
+
+    def get_veff(self, cell=None, dm=None, dm_last=None, vhf_last=None,
+                 hermi=1, kpt=None, kpts_band=None):
+        from gpu4pyscf.pbc.scf.khf import _get_veff
+        if dm is None: dm = self.make_rdm1()
+        if kpt is None: kpt = self.kpt
+        return _get_veff(self, cell, dm, dm_last, vhf_last, hermi, kpt, kpts_band)
 
     def density_fit(self, auxbasis=None, with_df=None):
         from gpu4pyscf.pbc.df.df_jk import density_fit
@@ -390,6 +415,11 @@ class RHF(SCF):
     def get_fermi(self):
         nocc = int((self.mo_occ.sum() / 2).round(3))
         return float(self.mo_energy[nocc-1].get())
+
+    def sfx2c1e(self):
+        from gpu4pyscf.pbc.x2c.x2c1e import sfx2c1e
+        return sfx2c1e(self)
+    x2c = x2c1e = sfx2c1e
 
     def Gradients(self):
         from gpu4pyscf.pbc.grad.rhf import Gradients
@@ -425,6 +455,21 @@ class RHF(SCF):
             pop = mulliken_pop(cell, dm, s=s, verbose=log)
         dip = None
         return pop, dip
+
+    def gen_response(self, mo_coeff=None, mo_occ=None,
+                     singlet=None, hermi=0, max_memory=None, with_nlc=False):
+        from gpu4pyscf.pbc.scf.khf import _get_veff
+        cell = self.cell
+        kpts = self.kpt.reshape(1, 3)
+        with_j = (singlet is None or singlet) and hermi != 2
+        def vind(dm1):
+            dm1_shape = dm1.shape
+            nao = dm1_shape[-1]
+            dm1 = dm1.reshape(1,1,nao,nao)
+            vhf = _get_veff(self, cell, dm1, hermi=hermi, kpts=kpts,
+                            with_j=with_j, with_ecoul=False)
+            return vhf.view(cp.ndarray).reshape(dm1_shape)
+        return vind
 
 def normalize_dm_(mf, dm, s1e=None):
     '''

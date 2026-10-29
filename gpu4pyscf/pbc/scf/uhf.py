@@ -29,6 +29,33 @@ from gpu4pyscf.scf import uhf as mol_uhf
 from gpu4pyscf.pbc.scf import hf as pbchf
 
 
+def _normalize_spin_dm_(dm, ne, nelec):
+    """Normalize spin densities and their orbital tags to the target populations.
+
+    Args:
+        dm : CuPy array
+            Alpha/beta densities, shape (2, nao, nao) or (2, nkpts, nao, nao).
+            Updated in place together with any mo_occ tags; mo_coeff is unchanged.
+        ne : array of length 2
+            Current alpha/beta electron counts obtained by tracing dm with
+            the overlap. Empty channels remain zero even if their target is nonzero.
+        nelec : sequence of length 2
+            Target alpha/beta electron counts. For k-point densities, both
+            ne and nelec count electrons summed over all k-points.
+
+    Returns:
+        The input dm after normalization.
+    """
+    scale_a = nelec[0] / ne[0] if ne[0] != 0 else 0.
+    scale_b = nelec[1] / ne[1] if ne[1] != 0 else 0.
+    dm[0] *= scale_a
+    dm[1] *= scale_b
+    if hasattr(dm, 'mo_coeff'):
+        dm.mo_occ[0] *= scale_a
+        dm.mo_occ[1] *= scale_b
+    return dm
+
+
 class UHF(pbchf.SCF):
     '''UHF class for PBCs.
     '''
@@ -51,11 +78,11 @@ class UHF(pbchf.SCF):
 
     def get_veff(self, cell=None, dm=None, dm_last=None, vhf_last=None, hermi=1,
                  kpt=None, kpts_band=None):
-        from gpu4pyscf.pbc.scf.kuhf import KUHF
+        from gpu4pyscf.pbc.scf.kuhf import _get_veff
         if dm is None: dm = self.make_rdm1()
         if kpt is None: kpt = self.kpt
         assert dm.ndim == 3 and len(dm) == 2
-        return KUHF.get_veff(self, cell, dm, dm_last, vhf_last, hermi, kpt, kpts_band)
+        return _get_veff(self, cell, dm, dm_last, vhf_last, hermi, kpt, kpts_band)
 
     def get_bands(self, kpts_band, cell=None, dm=None, kpt=None):
         if cell is None: cell = self.cell
@@ -84,12 +111,14 @@ class UHF(pbchf.SCF):
         return mo_energy, mo_coeff
 
     def get_init_guess(self, cell=None, key='minao', s1e=None):
+        assert isinstance(key, str)
         if cell is None:
             cell = self.cell
+        dm = mol_uhf.UHF.get_init_guess(self, cell, key)
+
         if s1e is None:
             s1e = self.get_ovlp(cell)
-        dm = cp.asarray(mol_uhf.UHF.get_init_guess(self, cell, key))
-        ne = cp.einsum('xij,ji->x', dm, s1e).real.get()
+        ne = cp.einsum('xij,ji->x', cp.asarray(dm), s1e).real.get()
         nelec = self.nelec
         if any(abs(ne - nelec) > 0.01):
             logger.debug(self, 'Big error detected in the electron number '
@@ -98,12 +127,7 @@ class UHF(pbchf.SCF):
                          'lead to instability in SCF for low-dimensional '
                          'systems.\n  DM is normalized wrt the number '
                          'of electrons %s', ne, nelec)
-            ne[1] += 1e-300 # Number of beta electrons may be 0
-            dm[0] *= nelec[0] / ne[0]
-            dm[1] *= nelec[1] / ne[1]
-            if hasattr(dm, 'mo_coeff'):
-                dm.mo_occ[0] *= nelec[0] / ne[0]
-                dm.mo_occ[1] *= nelec[1] / ne[1]
+            _normalize_spin_dm_(dm, ne, nelec)
         return dm
 
     init_guess_by_minao = mol_uhf.UHF.init_guess_by_minao
@@ -124,15 +148,17 @@ class UHF(pbchf.SCF):
     mulliken_pop = NotImplemented
     mulliken_meta = NotImplemented
     mulliken_meta_spin = NotImplemented
-    canonicalize = NotImplemented
+    canonicalize = mol_uhf.UHF.canonicalize
     spin_square = mol_uhf.UHF.spin_square
     stability = NotImplemented
+    newton = mol_uhf.UHF.newton
 
     dip_moment = NotImplemented
     to_ks = NotImplemented
     convert_from_ = NotImplemented
 
     density_fit = pbchf.RHF.density_fit
+    x2c = x2c1e = sfx2c1e = pbchf.RHF.sfx2c1e
 
     def get_fermi(self):
         nocc_a, nocc_b = self.nelec
@@ -153,7 +179,8 @@ class UHF(pbchf.SCF):
         '''Analyze the given SCF object:  print orbital energies, occupancies;
         print orbital coefficients; Mulliken population analysis; Diople moment.
         '''
-        from pyscf.scf.hf import mulliken_meta, mulliken_pop, MO_BASE
+        from pyscf.scf.hf import MO_BASE
+        from pyscf.scf.uhf import mulliken_meta, mulliken_pop
         log = logger.new_logger(self, verbose)
         cell = self.cell
         mo_energy = self.mo_energy.get()
@@ -178,3 +205,18 @@ class UHF(pbchf.SCF):
             pop = mulliken_pop(cell, dm, s=s, verbose=log)
         dip = None
         return pop, dip
+
+    def gen_response(self, mo_coeff=None, mo_occ=None,
+                     with_j=True, hermi=0, max_memory=None, with_nlc=False):
+        from gpu4pyscf.pbc.scf.kuhf import _get_veff
+        cell = self.cell
+        kpts = self.kpt.reshape(1, 3)
+        with_j = with_j and hermi != 2
+        def vind(dm1):
+            dm1_shape = dm1.shape
+            nao = dm1_shape[-1]
+            dm1 = dm1.reshape(2,1,1,nao,nao)
+            vhf = _get_veff(self, cell, dm1, hermi=hermi, kpts=kpts,
+                            with_j=with_j, with_ecoul=False)
+            return vhf.view(cp.ndarray).reshape(dm1_shape)
+        return vind

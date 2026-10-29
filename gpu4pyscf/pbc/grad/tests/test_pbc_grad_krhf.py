@@ -21,6 +21,7 @@ from pyscf import lib
 from pyscf.pbc import gto
 from pyscf.pbc.grad import krhf as krhf_cpu
 from gpu4pyscf.pbc.grad import krhf as krhf_gpu
+from gpu4pyscf.pbc.grad import rhf as rhf_gpu
 from gpu4pyscf.pbc.dft import numint
 from gpu4pyscf.pbc.df import AFTDF
 from gpu4pyscf.pbc.scf.rsjk import PBCJKMatrixOpt
@@ -59,6 +60,7 @@ class KnownValues(unittest.TestCase):
         3.37, 3.37, 0.00'''
         cell.basis = [[0, [3., 1]], [0, [.8, 1]], [1, [1., 1]]]
         cell.unit = 'bohr'
+        cell.verbose = 0
         cell.build()
         mf = cell.RHF().to_gpu()
         mf.rsjk = PBCJKMatrixOpt(cell)
@@ -104,6 +106,7 @@ class KnownValues(unittest.TestCase):
         3.37, 3.37, 0.00'''
         cell.basis = [[0, [3., 1]], [0, [.8, 1]]]
         cell.unit = 'bohr'
+        cell.verbose = 0
         cell.build()
         mf = cell.RHF().to_gpu().density_fit()
         mf.conv_tol_grad = 1e-9
@@ -143,6 +146,7 @@ class KnownValues(unittest.TestCase):
         cell.basis = [[0, [3., 1]], [0, [.8, 1]]]
         cell.pseudo = 'gth-pbe'
         cell.unit = 'bohr'
+        cell.verbose = 0
         cell.build()
         mf = cell.RHF().to_gpu().density_fit()
         mf.conv_tol_grad = 1e-9
@@ -206,6 +210,7 @@ class KnownValues(unittest.TestCase):
         3.370137329, 3.370137329, 0.000000000'''
         cell.basis = [[0, [3., 1]], [0, [.8, 1]]]
         cell.unit = 'bohr'
+        cell.verbose = 0
         cell.build()
         kpts = cell.make_kpts([1,1,2])
         mf = cell.KRHF(kpts=kpts, exxdiv='ewald').to_gpu()
@@ -231,6 +236,7 @@ class KnownValues(unittest.TestCase):
         3.37, 3.37, 0.00'''
         cell.basis = [[0, [3., 1]], [0, [.8, 1]], [1, [.8, 1]]]
         cell.unit = 'bohr'
+        cell.verbose = 0
         cell.build()
         kpts = cell.make_kpts([1,1,3])
         mf = cell.KRHF(kpts=kpts).to_gpu().density_fit()
@@ -259,6 +265,29 @@ class KnownValues(unittest.TestCase):
         e2 = mfs(atom_coords)
         self.assertAlmostEqual(g[1,2], (e1-e2)/disp, 5)
 
+    def test_rsjk_df_mixed_krhf_grad(self):
+        cell = gto.Cell()
+        cell.atom= [['H', [0.0, 0.0, 0.0]], ['H', [0.5,1.0,1.1]]]
+        cell.a = '''
+        0.00, 3.37, 3.37
+        3.37, 0.00, 3.37
+        3.37, 3.37, 0.00'''
+        cell.basis = [[0, [3., 1]], [0, [.8, 1]], [1, [.8, 1]]]
+        cell.unit = 'bohr'
+        cell.verbose = 0
+        cell.build()
+        kpts = cell.make_kpts([1,1,3])
+        mf = cell.KRHF(kpts=kpts).to_gpu().density_fit()
+        mf.rsjk = PBCJKMatrixOpt(cell)
+        g = mf.Gradients().kernel()
+        self.assertAlmostEqual(g[1,2], 0.042341071658407975, 6)
+        self.assertAlmostEqual(lib.fp(g), -0.16254422558624573, 6)
+
+        mfs = mf.as_scanner()
+        e1 = mfs([['H', [0.0, 0.0, 0.0]], ['H', [0.5,1.0,1.1+disp/2.0]]])
+        e2 = mfs([['H', [0.0, 0.0, 0.0]], ['H', [0.5,1.0,1.1-disp/2.0]]])
+        self.assertAlmostEqual(g[1,2], (e1-e2)/disp, 6)
+
     @unittest.skipIf(Version(pyscf.__version__) < Version('2.12'),
                      'The meaning of get_hcore in *.pbc.grad has been changed in pyscf==2.12. It doesn\'t include pseudopotential nonlocal term anymore.')
     def test_hcore(self):
@@ -276,6 +305,59 @@ class KnownValues(unittest.TestCase):
             dat = hcore_generator_gpu(1)
             ref = hcore_generator_cpu(1)
             assert abs(dat.get() - ref.transpose(1,0,2,3)).max() < 1e-8
+
+    def test_hcore_all_electron(self):
+        np.random.seed(3)
+        cell = pyscf.M(atom='H .5 .1 .3; H .9 .9 1.1',
+                      a=np.eye(3)*2.4 + (np.random.rand(3,3)*.4 - .3),
+                      basis=[[0,[2.3, 1]], [1,[.4, 1]]], verbose=0)
+        kpts = cell.make_kpts([1,1,3])
+        hcore_generator_gpu = krhf_gpu.Gradients(cell.KRHF(kpts=kpts)).hcore_generator()
+        dat = hcore_generator_gpu(1)
+        r = cell.atom_coords()
+        r[1,0] += 1e-3
+        e1 = cell.set_geom_(r, unit='Bohr', inplace=False).KRHF(kpts=kpts).get_hcore()
+        r[1,0] -= 2e-3
+        e2 = cell.set_geom_(r, unit='Bohr', inplace=False).KRHF(kpts=kpts).get_hcore()
+        assert abs(dat[:,0].get() - (e1 - e2)/2e-3).max() < 1e-6
+
+    @unittest.skip('RSJK for symmetry broken DM not working')
+    def test_time_reversal_symmetry_broken(self):
+        np.random.seed(3)
+        cell = pyscf.M(atom='H .5 .1 .3; H .9 .9 1.1',
+                      a=np.eye(3)*2.4 + (np.random.rand(3,3)*.4 - .3),
+                      basis=[[0,[2.3, 1]], [1,[ .4, 1]]], verbose=0)
+        kpts = cell.make_kpts([1,1,3])
+        mf = cell.KRHF(kpts=kpts, exxdiv='ewald').to_gpu()
+        mf.rsjk = PBCJKMatrixOpt(cell)
+        mf.run()
+        g = mf.Gradients().kernel()
+
+        mfs = mf.as_scanner()
+        r = cell.atom_coords()
+        r[0,0] += 1e-3
+        e1 = mfs(cell.set_geom_(r, unit='Bohr', inplace=False))
+        r[0,0] -= 2e-3
+        e2 = mfs(cell.set_geom_(r, unit='Bohr', inplace=False))
+        self.assertAlmostEqual(g[0,0], (e1-e2)/2e-3, 6)
+
+    def test_ewald_strain_deriv(self):
+        disp = 1e-5
+        ref = np.empty((3, 3))
+        for i in range(3):
+            for j in range(i+1):
+                cell1, cell2 = rhf_gpu._finite_diff_cells(cell, i, j, disp)
+                e1 = cell1.ewald()
+                e2 = cell2.ewald()
+                ref[j,i] = ref[i,j] = (e1 - e2) / (2*disp)
+        dat = rhf_gpu.ewald_derivatives(cell)[-3:]
+        assert abs(dat - ref).max() < 1e-9
+
+    def test_ewald_nuclear_gradient(self):
+        from pyscf.pbc.grad.rhf import grad_nuc as cpu_grad_nuc
+        ref = cpu_grad_nuc(cell)
+        dat = rhf_gpu.ewald_derivatives(cell)[:-3]
+        assert abs(dat - ref).max() < 1e-14
 
 if __name__ == "__main__":
     print("Full Tests for KRHF Gradients")

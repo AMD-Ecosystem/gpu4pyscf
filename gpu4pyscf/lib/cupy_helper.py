@@ -14,6 +14,7 @@
 
 import os
 import sys
+import warnings
 import functools
 import ctypes
 import numpy as np
@@ -27,6 +28,8 @@ from gpu4pyscf.lib.memcpy import copy_array, p2p_transfer  #NOQA
 from gpu4pyscf.lib import multi_gpu
 from gpu4pyscf.lib.utils import load_library
 from gpu4pyscf.__config__ import num_devices, _p2p_access
+from gpu4pyscf.__config__ import props as gpu_specs
+from gpu4pyscf import __config__
 
 LMAX_ON_GPU = 7
 DSOLVE_LINDEP = 1e-13
@@ -72,14 +75,10 @@ def get_avail_mem(exclude_memory_pool=False):
 
     mempool = cupy.get_default_memory_pool()
     used_mem = mempool.used_bytes()
-    mem_limit = mempool.get_limit()
-    if(mem_limit != 0):
-        return mem_limit - used_mem
-    else:
-        total_mem = mempool.total_bytes()
-        # get memGetInfo() is slow
-        mem_avail = cupy.cuda.runtime.memGetInfo()[0]
-        return mem_avail + total_mem - used_mem
+    total_mem = mempool.total_bytes()
+    # get memGetInfo() is slow
+    mem_avail = cupy.cuda.runtime.memGetInfo()[0]
+    return mem_avail + total_mem - used_mem
 
 def concatenate(array_list):
     ''' Concatenate axis=0 only
@@ -265,27 +264,58 @@ def unpack_tril(cderi_tril, out=None, stream=None, hermi=1):
     return out
 
 def unpack_sparse(cderi_sparse, row, col, p0, p1, nao, out=None, stream=None):
+    warnings.warn(
+        'unpack_sparse is deprecated. Use fill_symmetric instead',
+        DeprecationWarning, stacklevel=2)
+    return fill_symmetric(cderi_sparse, row*nao+col, nao, p0, p1, out, stream)
+
+def fill_symmetric(a, pair_addresses, nao, p0=0, p1=None, out=None, stream=None):
+    '''
+    Performs:
+
+        i, j = divmod(pair_addresses, nao)
+        out[j,i,:] = out[i,j,:] = a[:,p0:p1]
+    '''
+    assert a.ndim == 2
+    if p1 is None:
+        p1 = a.shape[1]
+
+    if out is None:
+        out = cupy.zeros([nao,nao,p1-p0], dtype=a.dtype)
+    else:
+        assert out.ndim == 3
+
     if stream is None:
         stream = cupy.cuda.get_current_stream()
-    if out is None:
-        out = cupy.zeros([nao,nao,p1-p0])
-    nij = len(row)
-    naux = cderi_sparse.shape[1]
-    nao = out.shape[1]
-    err = libcupy_helper.unpack_sparse(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
-        ctypes.cast(cderi_sparse.data.ptr, ctypes.c_void_p),
-        ctypes.cast(row.data.ptr, ctypes.c_void_p),
-        ctypes.cast(col.data.ptr, ctypes.c_void_p),
-        ctypes.cast(out.data.ptr, ctypes.c_void_p),
-        ctypes.c_int(nao),
-        ctypes.c_int(nij),
-        ctypes.c_int(naux),
-        ctypes.c_int(p0),
-        ctypes.c_int(p1)
-    )
-    if err != 0:
-        raise RuntimeError('failed in unpack_sparse')
+
+    pair_addresses = cupy.asarray(pair_addresses, dtype=np.int32)
+    out_stride = out.strides[-2] // out.itemsize
+    if a.strides[-1] == 8: # a is in row major
+        a_stride = a.strides[-2] // a.itemsize
+        err = libcupy_helper.decompress_and_fill(
+            ctypes.cast(stream.ptr, ctypes.c_void_p),
+            ctypes.cast(out.data.ptr, ctypes.c_void_p),
+            ctypes.c_int(out_stride),
+            ctypes.cast(a.data.ptr, ctypes.c_void_p),
+            ctypes.cast(pair_addresses.data.ptr, ctypes.c_void_p),
+            ctypes.c_int(len(pair_addresses)),
+            ctypes.c_int(nao),
+            ctypes.c_int(a_stride),
+            ctypes.c_int(p0), ctypes.c_int(p1))
+        if err != 0:
+            raise RuntimeError('decompress_and_fill failed')
+    else: # a is in column major
+        err = libcupy_helper.decompress_and_transpose(
+            ctypes.cast(stream.ptr, ctypes.c_void_p),
+            ctypes.cast(out.data.ptr, ctypes.c_void_p),
+            ctypes.c_int(out_stride), ctypes.cast(a.data.ptr, ctypes.c_void_p),
+            ctypes.cast(pair_addresses.data.ptr, ctypes.c_void_p),
+            ctypes.c_int(len(pair_addresses)),
+            ctypes.c_int(nao),
+            ctypes.c_int(p0), ctypes.c_int(p1),
+            ctypes.c_int(1), ctypes.c_int(0))
+        if err != 0:
+            raise RuntimeError('decompress_and_transpose failed')
     return out
 
 def add_sparse(a, b, indices):
@@ -294,7 +324,8 @@ def add_sparse(a, b, indices):
     '''
     assert a.device == b.device
     assert a.flags.c_contiguous
-    assert b.flags.c_contiguous
+    if not b.flags.c_contiguous:
+        b = cupy.ascontiguousarray(b)
     if len(indices) == 0: return a
     indices = cupy.asarray(indices, dtype=np.int32)
     n = a.shape[-1]
@@ -436,6 +467,10 @@ def take_last2d(a, indices, out=None):
     else:
         count = np.prod(a.shape[:-2])
     out = ndarray((count, nidx, nidx), buffer=out)
+    if a.ndim == 2:
+        out = out.reshape(nidx,nidx)
+    if nidx == 0:
+        return out
     indices_int32 = cupy.asarray(indices, dtype='int32')
     stream = cupy.cuda.get_current_stream()
     err = libcupy_helper.take_last2d(
@@ -449,8 +484,6 @@ def take_last2d(a, indices, out=None):
     )
     if err != 0:
         raise RuntimeError('failed in take_last2d kernel')
-    if a.ndim == 2:
-        out = out.reshape(nidx,nidx)
     return out
 
 def takebak(out, a, indices, axis=-1):
@@ -554,28 +587,48 @@ def hermi_triu(mat, hermi=1, inplace=True, stream=None):
         raise RuntimeError('hermi_triu kernel failed')
     return mat
 
-def cart2sph_cutensor(t, axis=0, ang=1, out=None):
-    '''
-    transform 'axis' of a tensor from cartesian basis into spherical basis with cutensor
-    '''
-    from gpu4pyscf.gto import mole
-    if(ang <= 1):
-        if(out is not None): out[:] = t
-        return t
-    size = list(t.shape)
-    c2s = mole.cart2sph_by_l(ang)
-    if(not t.flags['C_CONTIGUOUS']): t = cupy.asarray(t, order='C')
-    li_size = c2s.shape
-    nli = size[axis] // li_size[0]
-    i0 = max(1, np.prod(size[:axis]))
-    i3 = max(1, np.prod(size[axis+1:]))
-    out_shape = size[:axis] + [nli*li_size[1]] + size[axis+1:]
+def copy_symmetric(a, i_addr, j_addr, stream=None):
+    '''a[j_addr,i_addr] = a[i_addr, j_addr]'''
+    assert a.ndim == 3
+    if stream is None:
+        stream = cupy.cuda.get_current_stream()
+    N1, N2 = a.shape[1:3]
+    npairs = len(i_addr)
+    if a.dtype == np.complex128:
+        N2 *= 2
+    i_addr = cupy.asarray(i_addr, dtype=np.int32)
+    j_addr = cupy.asarray(j_addr, dtype=np.int32)
+    err = libcupy_helper.copy_symmetric(
+        ctypes.cast(stream.ptr, ctypes.c_void_p),
+        ctypes.cast(a.data.ptr, ctypes.c_void_p),
+        ctypes.cast(i_addr.data.ptr, ctypes.c_void_p),
+        ctypes.cast(j_addr.data.ptr, ctypes.c_void_p),
+        ctypes.c_int(npairs), ctypes.c_int(N1), ctypes.c_int(N2))
+    if err != 0:
+        raise RuntimeError('copy_symmetric kernel failed')
+    return a
 
-    t_cart = t.reshape([i0*nli, li_size[0], i3])
-    if(out is not None):
-        out = out.reshape([i0*nli, li_size[1], i3])
-    t_sph = contract('min,ip->mpn', t_cart, c2s, out=out)
-    return t_sph.reshape(out_shape)
+def scatter_add(a, idx, b, alpha=1, stream=None):
+    '''a[idx,:] += alpha * b'''
+    if stream is None:
+        stream = cupy.cuda.get_current_stream()
+    assert a.ndim == 2 and b.ndim == 2
+    assert a.dtype == b.dtype
+    nrow, ncol = b.shape
+    if b.dtype == np.complex128:
+        ncol *= 2
+    idx = cupy.asarray(idx, dtype=np.int32)
+    err = libcupy_helper.scatter_add(
+        ctypes.cast(stream.ptr, ctypes.c_void_p),
+        ctypes.cast(a.data.ptr, ctypes.c_void_p),
+        ctypes.cast(b.data.ptr, ctypes.c_void_p),
+        ctypes.cast(idx.data.ptr, ctypes.c_void_p),
+        ctypes.c_double(alpha),
+        ctypes.c_int(nrow), ctypes.c_int(ncol))
+    if err != 0:
+        raise RuntimeError('scatter_add kernel failed')
+    return a
+
 
 def cart2sph(t, axis=0, ang=1, out=None, stream=None):
     '''
@@ -801,6 +854,13 @@ def _gen_x0(v, xs):
         x0 = x0[0]
     return x0
 
+_MAX_MEMORY = os.getenv('PYSCF_MAX_MEMORY')
+if _MAX_MEMORY is None and __config__.MAX_MEMORY != 4000:
+    # 4000 MB is the built-in default initialized in pyscf.__config__.
+    # If MAX_MEMORY has been explicitly configured (e.g. in ~/.pyscf_conf.py),
+    # use that value when the environment variable is not set.
+    _MAX_MEMORY = __config__.MAX_MEMORY
+
 def empty_mapped(shape, dtype=float, order='C'):
     '''(experimental)
     Returns a new, uninitialized NumPy array with the given shape and dtype.
@@ -812,6 +872,15 @@ def empty_mapped(shape, dtype=float, order='C'):
     size = int(np.prod(shape))
     nbytes = size * int(np.dtype(dtype).itemsize)
     assert nbytes >= 0, f"nbytes = {nbytes} is negative, type(nbytes) = {type(nbytes)}, please check if overflow happens"
+
+    if _MAX_MEMORY is not None:
+        mem_used = lib.current_memory()[0] # in MB
+        mem_limit = float(_MAX_MEMORY)
+        if nbytes*1e-6 + mem_used > mem_limit:
+            raise MemoryError(
+                f'Cannot allocate {nbytes} bytes of host memory '
+                f'(current: {mem_used:.1f} MB, limit: {mem_limit:.1f} MB).')
+
     mem = cupy.cuda.PinnedMemoryPointer(
         cupy.cuda.PinnedMemory(nbytes, cupy.cuda.runtime.hostAllocMapped), 0)
     out = np.ndarray(shape, dtype=dtype, buffer=mem, order=order)
@@ -1156,7 +1225,9 @@ def sandwich_dot(a, c, out=None):
         out = out[0]
     return out
 
-def set_conditional_mempool_malloc(n_bytes_threshold=100000000):
+MEMPOOL_THRESHOLD = 100*1024*1024
+
+def set_conditional_mempool_malloc(n_bytes_threshold=MEMPOOL_THRESHOLD):
     '''
     Customize CuPy memory allocator.
 
@@ -1171,16 +1242,52 @@ def set_conditional_mempool_malloc(n_bytes_threshold=100000000):
     cuda_malloc = cupy.cuda.memory._malloc
     default_mempool_malloc = cupy.get_default_memory_pool().malloc
     def malloc(size):
-        if size >= n_bytes_threshold:
+        if size > n_bytes_threshold:
             return cuda_malloc(size)
         return default_mempool_malloc(size)
     cupy.cuda.set_allocator(malloc)
+
+def vec_dot(vec1, vec2):
+    '''
+    einsum('g,g->', vec1, vec2)
+    '''
+    vec1 = cupy.asarray(vec1)
+    vec2 = cupy.asarray(vec2)
+    assert vec1.dtype == vec2.dtype == cupy.float64
+    assert vec1.shape == vec2.shape
+    n = vec1.size
+
+    fn_name = 'vec_dot_kernel_order'
+    if fn_name not in _kernel_registery:
+        kernel_code = (r'''
+extern "C" __global__
+void ''' + fn_name + r'''(double *out, double *vec1, double *vec2, long long n) {
+    int tid = threadIdx.x;
+    int idx = blockDim.x * blockIdx.x + tid;
+    int stride = gridDim.x * blockDim.x;
+    double sum = 0;
+    for (long long g = idx; g < n; g += stride) {
+        sum += vec1[g] * vec2[g];
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        sum += __shfl_down_sync(0xffffffff, sum, offset);
+    }
+    int lane = tid % 32;
+    if (lane == 0) atomicAdd(out, sum);
+}''')
+        _kernel_registery[fn_name] = cupy.RawKernel(kernel_code, fn_name)
+
+    kernel = _kernel_registery[fn_name]
+    out = cupy.zeros(1)
+    workers = gpu_specs['multiProcessorCount']
+    kernel((workers*2,), (1024,), (out, vec1, vec2, n))
+    return out[0]
 
 def batched_vec3_norm2(batched_vec3):
     '''
     einsum('gx,gx->g', vec3, vec3) for the (N,3)-array vec3
     '''
-    assert type(batched_vec3) is cupy.ndarray
+    assert isinstance(batched_vec3, cupy.ndarray)
     assert batched_vec3.dtype == cupy.float64
     assert batched_vec3.ndim == 2
     assert batched_vec3.shape[0] == 3 or batched_vec3.shape[1] == 3
@@ -1193,41 +1300,107 @@ def batched_vec3_norm2(batched_vec3):
     assert n * 3 < np.iinfo(np.int32).max
 
     if order == "c":
-        fn_name = "vec3_norm2_kernel_c_order"
-        if fn_name not in _kernel_registery:
-            kernel_code = r'''
-                extern "C" __global__
-                void vec3_norm2_kernel_c_order(const double* __restrict__ vec3, double* __restrict__ norm2, const int n) {
-                    const int i = blockDim.x * blockIdx.x + threadIdx.x;
-                    if (i >= n) return;
-                    const double x = vec3[i * 3 + 0];
-                    const double y = vec3[i * 3 + 1];
-                    const double z = vec3[i * 3 + 2];
-                    norm2[i] = x*x + y*y + z*z;
-                }
-            '''
-            _kernel_registery[fn_name] = cupy.RawKernel(kernel_code, fn_name)
+        return batched_vec_norm2(batched_vec3)
     else:
-        fn_name = "vec3_norm2_kernel_f_order"
-        if fn_name not in _kernel_registery:
-            kernel_code = r'''
-                extern "C" __global__
-                void vec3_norm2_kernel_f_order(const double* __restrict__ vec3, double* __restrict__ norm2, const int n) {
-                    const int i = blockDim.x * blockIdx.x + threadIdx.x;
-                    if (i >= n) return;
-                    const double x = vec3[n * 0 + i];
-                    const double y = vec3[n * 1 + i];
-                    const double z = vec3[n * 2 + i];
-                    norm2[i] = x*x + y*y + z*z;
+        return batched_vec_norm2(batched_vec3.T)
+
+def batched_vec_norm2(vec, out=None):
+    '''
+    einsum('gx,gx->g', vec, vec)
+    '''
+    vec = cupy.asarray(vec)
+    assert vec.dtype == cupy.float64
+    assert vec.ndim == 2
+    n, x = vec.shape
+    c_order = vec.flags.c_contiguous
+
+    if c_order:
+        fn_name = f'vec{x}_norm2_kernel_c_order'
+    else:
+        assert vec.flags.f_contiguous
+        fn_name = f'vec{x}_norm2_kernel_f_order'
+
+    if fn_name not in _kernel_registery:
+        if c_order:
+            loop = ('for (int j = 0; j < ' + str(x) + '; j++) {'
+                    'double s = vec[i*' + str(x) + '+j];'
+                    'val += s * s; }')
+        else:
+            loop = ('for (int j = 0; j < ' + str(x) + '; j++) {'
+                    'double s = vec[n*j+i];'
+                    'val += s * s; }')
+        kernel_code = (
+            r'''extern "C" __global__ void ''' +
+            fn_name + r'''(double* __restrict__ vec, double* __restrict__ norm2, long long n, long long m) {
+                size_t off = (size_t)blockIdx.x * m * blockDim.x;
+                for (int k = 0; k < m; k++) {
+                    size_t i = off + blockDim.x * k + threadIdx.x;
+                    if (i >= n) break;
+                    double val = 0;
+                    ''' + loop + '''
+                    norm2[i] = val;
                 }
-            '''
-            _kernel_registery[fn_name] = cupy.RawKernel(kernel_code, fn_name)
+            }''')
+        _kernel_registery[fn_name] = cupy.RawKernel(kernel_code, fn_name)
+
     kernel = _kernel_registery[fn_name]
+    out = ndarray(n, np.float64, out)
+    m = max(n // (2000 * 1024), 1)
+    kernel(((n + m*1024 - 1) // (m*1024),), (1024,), (vec, out, n, m))
+    return out
 
-    batched_norm2 = cupy.zeros(n, dtype = cupy.float64)
-    kernel(((n + 1024 - 1) // 1024,), (1024,), (batched_vec3, batched_norm2, cupy.int32(n)))
+def batched_vec_dot(vec1, vec2, out=None):
+    '''
+    einsum('gx,gx->g', vec1, vec2)
+    '''
+    vec1 = cupy.asarray(vec1)
+    vec2 = cupy.asarray(vec2)
+    assert vec1.dtype == cupy.float64
+    assert vec2.dtype == cupy.float64
+    assert vec1.ndim == 2
+    assert vec1.shape == vec2.shape
+    n, x = vec1.shape
+    c_order = vec1.flags.c_contiguous
 
-    return batched_norm2
+    if c_order:
+        assert vec2.flags.c_contiguous
+        fn_name = f'vec{x}_dot_kernel_c_order'
+    else:
+        assert vec1.flags.f_contiguous
+        assert vec2.flags.f_contiguous
+        fn_name = f'vec{x}_dot_kernel_f_order'
+
+    if fn_name not in _kernel_registery:
+        if c_order:
+            loop = ('for (int j = 0; j < ' + str(x) + '; j++) {'
+                    'double s1 = vec1[i*' + str(x) + '+j];'
+                    'double s2 = vec2[i*' + str(x) + '+j];'
+                    'val += s1 * s2; }')
+        else:
+            loop = ('for (int j = 0; j < ' + str(x) + '; j++) {'
+                    'double s1 = vec1[n*j+i];'
+                    'double s2 = vec2[n*j+i];'
+                    'val += s1 * s2; }')
+        kernel_code = (
+            r'''extern "C" __global__ void ''' +
+            fn_name + r'''(double* __restrict__ vec1, double* __restrict__ vec2,
+                double* __restrict__ norm2, long long n, long long m) {
+                size_t off = (size_t)blockIdx.x * m * blockDim.x;
+                for (int k = 0; k < m; k++) {
+                    size_t i = off + blockDim.x * k + threadIdx.x;
+                    if (i >= n) break;
+                    double val = 0;
+                    ''' + loop + '''
+                    norm2[i] = val;
+                }
+            }''')
+        _kernel_registery[fn_name] = cupy.RawKernel(kernel_code, fn_name)
+
+    kernel = _kernel_registery[fn_name]
+    out = ndarray(n, np.float64, out)
+    m = max(n // (2000 * 1024), 1)
+    kernel(((n + m*1024 - 1) // (m*1024),), (1024,), (vec1, vec2, out, n, m))
+    return out
 
 cholesky = cusolver.cholesky
 

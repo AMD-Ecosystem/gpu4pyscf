@@ -15,7 +15,7 @@
 '''Density expansion on plane waves'''
 
 __all__ = [
-    'get_pp', 'get_nuc', 'AFTDF'
+    'get_pp', 'get_nuc', 'get_SI', 'AFTDF'
 ]
 
 import contextlib
@@ -31,12 +31,14 @@ from pyscf.pbc.lib.kpts import KPoints
 from pyscf.pbc.df import ft_ao
 from gpu4pyscf.pbc.tools.k2gamma import kpts_to_kmesh
 from gpu4pyscf.pbc.tools.pbc import get_coulG
+from gpu4pyscf.pbc.gto.cell import get_Gv, get_Gv_base, get_Gv_weights, get_SI
 from gpu4pyscf.pbc.df import aft_jk
 from gpu4pyscf.pbc.df.ft_ao import FTOpt
 from gpu4pyscf.pbc.lib.kpts_helper import reset_kpts
+from gpu4pyscf.gto.mole import SortedGTO
 from gpu4pyscf.lib import logger, utils
 from gpu4pyscf.lib.cupy_helper import (return_cupy_array, contract, unpack_tril,
-                                       get_avail_mem)
+                                       get_avail_mem, asarray, ndarray)
 
 KE_SCALING = aft_cpu.KE_SCALING
 
@@ -63,10 +65,10 @@ def _get_pp_loc_part1(mydf, kpts=None, with_pseudo=True):
 
     if with_pseudo:
         vpplocG = pp_int.get_gth_vlocG_part1(cell, Gv)
-        vpplocG = -np.einsum('ij,ij->j', cell.get_SI(Gv), vpplocG)
+        vpplocG = -np.einsum('ij,ij->j', get_SI(cell, mesh=mesh), vpplocG)
         vpplocG = cp.asarray(vpplocG)
     else:
-        fakenuc = aft_cpu._fake_nuc(cell, with_pseudo=with_pseudo)
+        fakenuc = _fake_nuc(cell, with_pseudo=with_pseudo)
         aoaux = cp.asarray(ft_ao.ft_ao(fakenuc, Gv))
         charges = cp.asarray(cell.atom_charges(), dtype=np.float64)
         coulG = get_coulG(cell, kpt_allow, mesh=mesh, Gv=Gv)
@@ -184,7 +186,7 @@ class AFTDF(lib.StreamObject):
             mesh = self.mesh
         if omega is None:
             omega = cell.omega
-        Gv, Gvbase, kws = cell.get_Gv_weights(mesh)
+        Gv, Gvbase, kws = get_Gv_weights(cell, mesh)
 
         if lr_factor == sr_factor:
             coulG = get_coulG(cell, kpt, exx, mesh=mesh, Gv=Gv,
@@ -223,6 +225,8 @@ class AFTDF(lib.StreamObject):
         The tensors returned by this function is different to the one in PySCF CPU version
         '''
         cell = self.cell
+        if isinstance(cell, SortedGTO):
+            cell = cell.cell
         if mesh is None:
             mesh = self.mesh
         if bvk_kmesh is None:
@@ -296,7 +300,7 @@ class AFTDF(lib.StreamObject):
     # post-HF methods.
     def get_jk(self, dm, hermi=1, kpts=None, kpts_band=None,
                with_j=True, with_k=True, omega=None, exxdiv=None):
-        kpts, is_single_kpt = _check_kpts(kpts, dm)
+        kpts, is_single_kpt = _check_kpts(kpts)
         if is_single_kpt:
             return aft_jk.get_jk(self, dm, hermi, kpts[0], kpts_band, with_j,
                                   with_k, exxdiv, omega)
@@ -312,6 +316,8 @@ class AFTDF(lib.StreamObject):
     get_j_e1 = aft_jk.get_ej_ip1
     get_k_e1 = aft_jk.get_ek_ip1
     get_jk_e1 = NotImplemented
+    get_ej_derivatives = aft_jk.get_ej_derivatives
+    get_ek_derivatives = aft_jk.get_ek_derivatives
 
     get_eri = get_ao_eri = NotImplemented
     ao2mo = get_mo_eri = NotImplemented
@@ -327,9 +333,15 @@ class AFTDF(lib.StreamObject):
         out = AFTDF(self.cell, kpts=self.kpts)
         return utils.to_cpu(self, out=out)
 
-def _check_kpts(kpts, dm):
+def _check_kpts(kpts, dm=None):
     '''Check if the argument kpts is a single k-point'''
-    is_single_kpt =True
+    if dm is None:
+        if kpts is None:
+            kpts = np.zeros((1, 3))
+        is_single_kpt = kpts.ndim == 1
+        return kpts.reshape(-1, 3), is_single_kpt
+
+    is_single_kpt = True
     if kpts is None:
         kpts = np.zeros((1, 3))
         if (dm.ndim == 2 or # RHF
@@ -350,3 +362,71 @@ def _check_kpts(kpts, dm):
         else: # KUHF
             assert dm.shape[:2] == (2, nkpts), 'KUHF dm incompatible with kpts'
     return kpts, is_single_kpt
+
+def _fake_nuc(cell, with_pseudo=True):
+    '''A fake cell with steep gaussians to mimic nuclear density
+    '''
+    if isinstance(cell, SortedGTO):
+        cell = cell.cell
+    fakenuc = cell.copy(deep=False)
+    natm = cell.natm
+
+    ptr0 = gto.PTR_ENV_START
+    _env = np.append(np.zeros(ptr0), cell.atom_coords().ravel())
+
+    fakenuc._atm = cell._atm.copy()
+    ptr1 = ptr0 + natm * 3
+    fakenuc._atm[:,gto.PTR_COORD] = np.arange(ptr0, ptr1, 3)
+    ptr0 = ptr1
+
+    # point nuclear model
+    eta = np.full(natm, 1e16)
+
+    # Gaussian nuclear model
+    nuc_mod_idx = np.where(cell._atm[:,gto.NUC_MOD_OF] == gto.NUC_GAUSS)[0]
+    eta[nuc_mod_idx] = cell._env[cell._atm[nuc_mod_idx,gto.PTR_ZETA]]
+
+    if with_pseudo:
+        for ia in range(natm):
+            symb = cell.atom_symbol(ia)
+            if symb in cell._pseudo:
+                pp = cell._pseudo[symb]
+                rloc, nexp, cexp = pp[1:3+1]
+                eta[ia] = .5 / rloc**2
+
+    half_sph_norm = .5/np.sqrt(np.pi)
+    norm = half_sph_norm / gto.gaussian_int(2, eta)
+    fakenuc._env = _env = np.hstack([_env, eta, norm])
+
+    fakenuc._bas = _bas = np.zeros((natm, 8), dtype=np.int32)
+    _bas[:,gto.ATOM_OF] = np.arange(natm)
+    _bas[:,gto.NPRIM_OF] = 1
+    _bas[:,gto.NCTR_OF] = 1
+    _bas[:,gto.PTR_EXP] = ptr0 + np.arange(natm)
+    _bas[:,gto.PTR_COEFF] = ptr0 + natm + np.arange(natm)
+
+    fakenuc.rcut = 0.1
+    return fakenuc
+
+def _get_ZSI(cell, mesh=None, out=None):
+    '''
+    Calculate the product of nuclear charges and structure factor
+
+    einsum('i,ij->j', Z, SI)
+    '''
+    assert cell.dimension == 3
+    if mesh is None:
+        mesh = cell.mesh
+    basex, basey, basez = get_Gv_base(cell, mesh)
+    b = cell.reciprocal_vectors()
+    coords = cell.atom_coords()
+    Z = asarray(-cell.atom_charges())
+    rb = asarray(coords.dot(b.T))
+    SIx = cp.exp(-1j*rb[:,0,None] * basex)
+    SIy = cp.exp(-1j*rb[:,1,None] * basey)
+    SIz = cp.exp(-1j*rb[:,2,None] * basez)
+    SIx *= Z[:,None]
+    rho_xy = SIx[:,:,None] * SIy[:,None,:]
+    out = ndarray(mesh, dtype=np.complex128, buffer=out)
+    ZG = contract('qxy,qz->xyz', rho_xy, SIz, out=out).ravel()
+    return ZG

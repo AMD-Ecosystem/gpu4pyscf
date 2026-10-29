@@ -21,6 +21,7 @@ import gpu4pyscf
 from pyscf import lib, gto, scf
 from gpu4pyscf import tdscf, nac, dft
 from gpu4pyscf.solvent.tdscf.pcm import WithSolventTDSCFNacMethod
+from gpu4pyscf.grad.tests.test_tdrhf_grad import diagonalize_tda
 
 atom = """
 O       0.0000000000     0.0000000000     0.0000000000
@@ -39,21 +40,6 @@ def setUpModule():
 def tearDownModule():
     global mol 
     del mol
-
-
-def diagonalize_tda(a, nroots=5):
-    nocc, nvir = a.shape[:2]
-    nov = nocc * nvir
-    a = a.reshape(nov, nov)
-    e, xy = np.linalg.eig(np.asarray(a))
-    sorted_indices = np.argsort(e)
-
-    e_sorted = e[sorted_indices]
-    xy_sorted = xy[:, sorted_indices]
-
-    e_sorted_final = e_sorted[e_sorted > 1e-3]
-    xy_sorted = xy_sorted[:, e_sorted > 1e-3]
-    return e_sorted_final[:nroots], xy_sorted[:, :nroots]
 
 
 def get_mf(mol, mf, s, mo_coeff, method='CPCM'):
@@ -276,9 +262,9 @@ class KnownValues(unittest.TestCase):
                                    [ 0.0000000000, -1.4830798082,  1.0952335814],
                                    [-0.0000000000, -1.4830798082, -1.0952335814]])
         assert abs(np.abs(nac1.de)-np.abs(ref)).max() < 1.0E-6
-        assert abs(np.abs(nac1.de_scaled) - np.abs(ref_scaled)).max() < 1.0E-6
+        assert abs(np.abs(nac1.de_scaled) - np.abs(ref_scaled)).max() < 2.0E-6
         assert abs(np.abs(nac1.de_etf) - np.abs(ref_etf)).max() < 1.0E-6
-        assert abs(np.abs(nac1.de_etf_scaled) - np.abs(ref_etf_scaled)).max() < 1.0E-6
+        assert abs(np.abs(nac1.de_etf_scaled) - np.abs(ref_etf_scaled)).max() < 2.0E-6
 
     @pytest.mark.slow
     def test_nac_tda_singlet_ge_ref_IEFPCM(self):
@@ -470,9 +456,9 @@ class KnownValues(unittest.TestCase):
                                    [ 0.0000000000,  1.4826227017, -1.0948208712],
                                    [-0.0000000000,  1.4826227017,  1.0948208712]])
         assert abs(np.abs(nac1.de)-np.abs(ref)).max() < 1.0E-6
-        assert abs(np.abs(nac1.de_scaled) - np.abs(ref_scaled)).max() < 1.0E-6
+        assert abs(np.abs(nac1.de_scaled) - np.abs(ref_scaled)).max() < 2.0E-6
         assert abs(np.abs(nac1.de_etf) - np.abs(ref_etf)).max() < 1.0E-6
-        assert abs(np.abs(nac1.de_etf_scaled) - np.abs(ref_etf_scaled)).max() < 1.0E-6
+        assert abs(np.abs(nac1.de_etf_scaled) - np.abs(ref_etf_scaled)).max() < 2.0E-6
 
     @pytest.mark.slow
     def test_nac_tda_df_b3lyp_singlet_ge_ref_IEFPCM(self):

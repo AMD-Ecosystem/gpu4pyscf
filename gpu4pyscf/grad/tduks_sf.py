@@ -18,7 +18,8 @@
 
 from functools import reduce
 import cupy as cp
-from pyscf import lib
+import numpy as np
+from pyscf import lib, gto
 from gpu4pyscf.lib.cupy_helper import contract, tag_array
 from gpu4pyscf.lib import logger
 from gpu4pyscf.df import int3c2e
@@ -233,7 +234,8 @@ def grad_elec(td_grad, x_y, atmlst=None, verbose=logger.INFO):
 
     dh1e_ground_and_td = int3c2e.get_dh1e(mol, dm_correlated)  # 1/r like terms
     if len(mol._ecpbas) > 0:
-        dh1e_ground_and_td += rhf_grad.get_dh1e_ecp(mol, oo0a + oo0b)  # 1/r like terms
+        ecp_atoms = np.unique(mol._ecpbas[:, gto.ATOM_OF])
+        dh1e_ground_and_td[ecp_atoms] += rhf_grad.get_dh1e_ecp(mol, oo0a + oo0b)  # 1/r like terms
 
     if mol._pseudo:
         raise NotImplementedError('Pseudopotential gradient not supported for molecular system yet')
@@ -371,15 +373,7 @@ def _contract_xc_kernel(td_grad, xc_code, dmvo, dmoo=None, with_vxc=True, with_k
         )
 
     if td_grad.base.collinear == 'mcol':
-        whether_use_gpu = os.environ.get('LIBXC_ON_GPU', '0') == '1'
-        if deriv == 3:
-            if whether_use_gpu:
-                eval_xc_eff = mcfun_eval_xc_adapter_sf(ni, xc_code, td_grad.base.collinear_samples)
-            else:
-                ni_cpu = ni.to_cpu()
-                eval_xc_eff = mcfun_eval_xc_adapter_sf(ni_cpu, xc_code, td_grad.base.collinear_samples)
-        else:
-            eval_xc_eff = mcfun_eval_xc_adapter_sf(ni, xc_code, td_grad.base.collinear_samples)
+        eval_xc_eff = mcfun_eval_xc_adapter_sf(ni, xc_code, td_grad.base.collinear_samples)
     elif td_grad.base.collinear == 'ncol':
         raise NotImplementedError('Locally collinear approach is not implemented')
 
@@ -469,7 +463,9 @@ class Gradients(tduhf_grad.Gradients):
         return grad_elec(self, xy, atmlst, self.verbose)
 
     def jk_energies_per_atom(
-        self, dm_list, j_factor=None, k_factor=None, omega=0, hermi=0, sum_results=False, verbose=None
+        self, dm_list, j_factor=None, k_factor=None,
+        omega=None, lr_factor=None, sr_factor=None,
+        hermi=0, sum_results=False, verbose=None
     ):
         """
         Computes a set of first-order derivatives of J/K contributions for each
@@ -505,7 +501,9 @@ class Gradients(tduhf_grad.Gradients):
                 vhfopt = mf._opt_gpu[omega] = _VHFOpt(mol, mf.direct_scf_tol).build()
         if isinstance(dm_list, cp.ndarray) and dm_list.ndim == 2:
             dm_list = dm_list[None]
-        ejk = _jk_energies_per_atom(vhfopt, dm_list, j_factor, k_factor, sum_results, verbose)
+        ejk = _jk_energies_per_atom(vhfopt, dm_list, j_factor, k_factor,
+                                    omega=omega, lr_factor=lr_factor, sr_factor=sr_factor,
+                                    sum_results=sum_results, verbose=verbose)
         return ejk
 
 

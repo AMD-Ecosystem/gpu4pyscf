@@ -145,12 +145,7 @@ def _contract_xc_kernel_batched(td_grad, xc_code, dmvoI, dmvoJ=None, dmoo_batch=
             rho *= 0.5
             rho = cp.repeat(rho[cp.newaxis], 2, axis=0)
 
-        if deriv > 2 and os.environ.get('LIBXC_ON_GPU', '0') != '1':
-            ni_cpu = numint_cpu()
-            vxc, fxc, kxc = ni_cpu.eval_xc_eff(xc_code, rho.get(), deriv, xctype=xctype)[1:]
-            vxc, fxc, kxc = cp.asarray(vxc), cp.asarray(fxc), cp.asarray(kxc)
-        else:
-            vxc, fxc, kxc = ni.eval_xc_eff(xc_code, rho, deriv, xctype=xctype)[1:]
+        vxc, fxc, kxc = ni.eval_xc_eff(xc_code, rho, deriv, xctype=xctype, spin=0)[1:]
 
         # Pre-calculate Non-singlet coupling factors outside batch loop
         if not singlet:
@@ -601,7 +596,8 @@ def get_nacv_multi(td_nac, x_list, y_list, E_list, singlet=True, ge_targets=None
     for k in range(total_tasks):
         dh1e_k = int3c2e.get_dh1e(mol, P_all[k])
         if len(mol._ecpbas) > 0:
-            dh1e_k += rhf_grad.get_dh1e_ecp(mol, P_all[k])
+            ecp_atoms = np.unique(mol._ecpbas[:, gto.ATOM_OF])
+            dh1e_k[ecp_atoms] += rhf_grad.get_dh1e_ecp(mol, P_all[k])
         dh1e_td_list.append(dh1e_k)
     dh1e_td_all = cp.array(dh1e_td_list)
 

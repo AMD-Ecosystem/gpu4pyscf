@@ -11,17 +11,20 @@ endif()
 # int3c2e milestone.
 add_library(pbc SHARED
   pbc_driver.cu
-  ft_ao.cu ft_ao_ip1.cu
+  ft_ao.cu ft_ao_ip1.cu contract_ft_ao.cu
   fill_int3c2e.cu contract_int3c2e.cu ejk_int3c2e_ip1.cu
-  fill_int2c2e.cu fill_int2c2e_ip1.cu
-  overlap.cu supmol_sr_estimator.cu
+  fill_int2c2e.cu fill_int2c2e_ip1.cu e_int2c2e_ip1.cu
+  contract_int3c2e_pvp.cu
+  overlap.cu ppnl.cu
+  supmol_sr_estimator.cu
   rys_roots_dat.cu
   rys_contract_k.cu rys_contract_jk_ip1.cu
   rys_contract_j.cu
   unrolled_rys_k.cu
   nr_eval_gto.cu
-  sorting.c
-  decompress.cu fill_triu.cu
+  sorting.c write_cderi.c int3c2e_recontract.c
+  screen.cu
+  fill_triu.cu
 )
 
 g4p_set_hip_language(pbc)

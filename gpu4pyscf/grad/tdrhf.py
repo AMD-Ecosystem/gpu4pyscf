@@ -32,7 +32,8 @@ from gpu4pyscf.__config__ import props as gpu_specs
 from gpu4pyscf.lib import utils
 from gpu4pyscf.lib import multi_gpu
 from gpu4pyscf.scf.jk import (
-    LMAX, QUEUE_DEPTH, SHM_SIZE, libvhf_rys, _VHFOpt, _TimingCollector)
+    LMAX, QUEUE_DEPTH, SHM_SIZE, libvhf_rys, _VHFOpt, _TimingCollector,
+    _check_rsh_factors)
 from gpu4pyscf.grad.rhf import _ejk_quartets_scheme
 from gpu4pyscf.tdscf.rhf import TDA
 from gpu4pyscf.gto.mole import extract_pgto_params
@@ -211,7 +212,8 @@ def grad_elec(td_grad, x_y, singlet=True, atmlst=None, verbose=logger.INFO,
 
     dh1e_ground_and_td = int3c2e.get_dh1e(mol, dm_correlated)  # 1/r like terms
     if len(mol._ecpbas) > 0:
-        dh1e_ground_and_td += rhf_grad.get_dh1e_ecp(mol, dm_correlated)  # 1/r like terms
+        ecp_atoms = np.unique(mol._ecpbas[:, gto.ATOM_OF])
+        dh1e_ground_and_td[ecp_atoms] += rhf_grad.get_dh1e_ecp(mol, dm_correlated)  # 1/r like terms
 
     if mol._pseudo:
         raise NotImplementedError("Pseudopotential gradient not supported for molecular system yet")
@@ -291,6 +293,7 @@ def as_scanner(td_grad, state=1):
                          (TDSCF_GradScanner, td_grad.__class__), name)
 
 def _jk_energies_per_atom(vhfopt, dm_pairs, j_factor=None, k_factor=None,
+                          omega=None, lr_factor=None, sr_factor=None,
                           sum_results=False, verbose=None):
     '''
     Computes a set of first-order derivatives of J/K contributions for each
@@ -313,6 +316,7 @@ def _jk_energies_per_atom(vhfopt, dm_pairs, j_factor=None, k_factor=None,
         sum_results : bool
             If True, aggregate all sets of derivatives into a single result.
     '''
+    assert lr_factor is None and sr_factor is None
     log = logger.new_logger(vhfopt.mol, verbose)
     cput0 = log.init_timer()
     mol = vhfopt.sorted_mol
@@ -331,6 +335,8 @@ def _jk_energies_per_atom(vhfopt, dm_pairs, j_factor=None, k_factor=None,
     dm2 = vhfopt.apply_coeff_C_mat_CT(dm2)
     nao = dm1.shape[-1]
 
+    omega, lr_factor, sr_factor = _check_rsh_factors(mol, omega, lr_factor, sr_factor)
+
     assert j_factor is None or len(j_factor) == n_dm
     assert k_factor is None or len(k_factor) == n_dm
     if j_factor is None:
@@ -343,7 +349,6 @@ def _jk_energies_per_atom(vhfopt, dm_pairs, j_factor=None, k_factor=None,
     ao_loc = mol.ao_loc
     uniq_l_ctr = mol.uniq_l_ctr
     uniq_l = uniq_l_ctr[:,0]
-    lmax = uniq_l.max()
     l_ctr_bas_loc = np.append(0, np.cumsum(mol.l_ctr_counts))
     l_symb = [lib.param.ANGULAR[i] for i in uniq_l]
     assert uniq_l.max() <= LMAX
@@ -353,11 +358,26 @@ def _jk_energies_per_atom(vhfopt, dm_pairs, j_factor=None, k_factor=None,
     diffuse_exps, diffuse_ctr_coef = extract_pgto_params(mol, 'diffuse')
 
     n_groups = len(uniq_l_ctr)
-    tasks = ((i, j, k, l)
+    tasks = [(i, j, k, l)
              for i in range(n_groups)
              for j in range(i+1)
              for k in range(i+1)
-             for l in range(k+1))
+             for l in range(k+1)]
+    schemes = {t: _ejk_quartets_scheme(mol, uniq_l_ctr[list(t)]) for t in tasks}
+
+    # Size the per-block dd cache from the actual schemes: the quartets per
+    # block grow with SHM_SIZE faster than DD_CACHE_MAX's integer factor.
+    nf = (uniq_l + 1) * (uniq_l + 2) // 2
+    nf = nf[:,None] * nf
+    nf = nf[:,:,None,None] * nf
+    dd_cache_maxsize = max(scheme[0] * nf[tuple(task)] for task, scheme in schemes.items())
+    if sum_results:
+        kern = libvhf_rys.RYS_per_atom_jk_ip1_sum
+    else:
+        kern = libvhf_rys.RYS_per_atom_jk_ip1_multidm
+        dd_cache_maxsize *= n_dm
+
+    tasks = iter(tasks)
 
     def proc():
         device_id = cp.cuda.device.get_device_id()
@@ -371,10 +391,8 @@ def _jk_energies_per_atom(vhfopt, dm_pairs, j_factor=None, k_factor=None,
         _dm2 = cp.asarray(dm2, order='C')
 
         if sum_results:
-            kern = libvhf_rys.RYS_per_atom_jk_ip1_sum
             ejk = cp.zeros((mol.natm, 3))
         else:
-            kern = libvhf_rys.RYS_per_atom_jk_ip1_multidm
             ejk = cp.zeros((n_dm, mol.natm, 3))
         _j_factor = cp.asarray(j_factor, dtype=np.float64)
         _k_factor = cp.asarray(k_factor, dtype=np.float64)
@@ -390,11 +408,11 @@ def _jk_energies_per_atom(vhfopt, dm_pairs, j_factor=None, k_factor=None,
         workers = gpu_specs['multiProcessorCount']
         # An additional integer to count for the proccessed pair_ijs
         pool = cp.empty(workers*QUEUE_DEPTH+n_dm, dtype=np.int32)
-        dd_cache_maxsize = DD_CACHE_MAX[lmax] * n_dm
         dd_pool = cp.empty((workers, dd_cache_maxsize), dtype=np.float64)
         t1 = log.timer_debug1(f'q_cond and dm_cond on Device {device_id}', *cput0)
 
-        for i, j, k, l in tasks:
+        for task in tasks:
+            i, j, k, l = task
             shls_slice = l_ctr_bas_loc[[i, i+1, j, j+1, k, k+1, l, l+1]]
             pair_ij_mapping, q_cond_ij, s_cond_ij = bas_pair_cache[i,j]
             pair_kl_mapping, q_cond_kl, s_cond_kl = bas_pair_cache[k,l]
@@ -403,37 +421,39 @@ def _jk_energies_per_atom(vhfopt, dm_pairs, j_factor=None, k_factor=None,
             if npairs_ij == 0 or npairs_kl == 0:
                 continue
             llll = f'({l_symb[i]}{l_symb[j]}|{l_symb[k]}{l_symb[l]})'
-            scheme = _ejk_quartets_scheme(mol, uniq_l_ctr[[i, j, k, l]])
-            blksize = QUEUE_DEPTH - 512
-            for b0, b1 in lib.prange(0, npairs_kl, blksize):
-                err = kern(
-                    ctypes.cast(ejk.data.ptr, ctypes.c_void_p),
-                    ctypes.cast(_j_factor.data.ptr, ctypes.c_void_p), j_factor.ctypes,
-                    ctypes.cast(_k_factor.data.ptr, ctypes.c_void_p), k_factor.ctypes,
-                    ctypes.cast(_dm1.data.ptr, ctypes.c_void_p),
-                    ctypes.cast(_dm2.data.ptr, ctypes.c_void_p),
-                    ctypes.c_int(n_dm), ctypes.c_int(nao),
-                    rys_envs, (ctypes.c_int*2)(*scheme),
-                    (ctypes.c_int*8)(*shls_slice),
-                    ctypes.c_int(npairs_ij), ctypes.c_int(b1-b0),
-                    ctypes.cast(pair_ij_mapping.data.ptr, ctypes.c_void_p),
-                    ctypes.cast(pair_kl_mapping[b0:].data.ptr, ctypes.c_void_p),
-                    ctypes.cast(q_cond_ij.data.ptr, ctypes.c_void_p),
-                    ctypes.cast(q_cond_kl[b0:].data.ptr, ctypes.c_void_p),
-                    ctypes.cast(s_cond_ij.data.ptr, ctypes.c_void_p),
-                    ctypes.cast(s_cond_kl[b0:].data.ptr, ctypes.c_void_p),
-                    ctypes.cast(_diffuse_exps.data.ptr, ctypes.c_void_p),
-                    ctypes.cast(dm_cond.data.ptr, ctypes.c_void_p),
-                    ctypes.c_float(log_cutoff),
-                    ctypes.c_float(dm_penalty),
-                    ctypes.cast(pool.data.ptr, ctypes.c_void_p),
-                    ctypes.cast(dd_pool.data.ptr, ctypes.c_void_p),
-                    ctypes.c_int(dd_cache_maxsize),
-                    mol._atm.ctypes, ctypes.c_int(mol.natm),
-                    mol._bas.ctypes, ctypes.c_int(mol.nbas), mol._env.ctypes)
-                if err != 0:
-                    raise RuntimeError(f'RYS_per_atom_jk_ip1 kernel for {llll} failed')
-                kern_counts += 1
+            scheme = schemes[task]
+
+            err = kern(
+                ctypes.cast(ejk.data.ptr, ctypes.c_void_p),
+                ctypes.cast(_j_factor.data.ptr, ctypes.c_void_p), j_factor.ctypes,
+                ctypes.cast(_k_factor.data.ptr, ctypes.c_void_p), k_factor.ctypes,
+                ctypes.cast(_dm1.data.ptr, ctypes.c_void_p),
+                ctypes.cast(_dm2.data.ptr, ctypes.c_void_p),
+                ctypes.c_int(n_dm), ctypes.c_int(nao),
+                ctypes.c_double(omega),
+                ctypes.c_double(lr_factor),
+                ctypes.c_double(sr_factor),
+                rys_envs, (ctypes.c_int*2)(*scheme),
+                (ctypes.c_int*8)(*shls_slice),
+                ctypes.c_int(npairs_ij), ctypes.c_int(npairs_kl),
+                ctypes.cast(pair_ij_mapping.data.ptr, ctypes.c_void_p),
+                ctypes.cast(pair_kl_mapping.data.ptr, ctypes.c_void_p),
+                ctypes.cast(q_cond_ij.data.ptr, ctypes.c_void_p),
+                ctypes.cast(q_cond_kl.data.ptr, ctypes.c_void_p),
+                ctypes.cast(s_cond_ij.data.ptr, ctypes.c_void_p),
+                ctypes.cast(s_cond_kl.data.ptr, ctypes.c_void_p),
+                ctypes.cast(_diffuse_exps.data.ptr, ctypes.c_void_p),
+                ctypes.cast(dm_cond.data.ptr, ctypes.c_void_p),
+                ctypes.c_float(log_cutoff),
+                ctypes.c_float(dm_penalty),
+                ctypes.cast(pool.data.ptr, ctypes.c_void_p),
+                ctypes.cast(dd_pool.data.ptr, ctypes.c_void_p),
+                ctypes.c_int(dd_cache_maxsize),
+                mol._atm.ctypes, ctypes.c_int(mol.natm),
+                mol._bas.ctypes, ctypes.c_int(mol.nbas), mol._env.ctypes)
+            if err != 0:
+                raise RuntimeError(f'RYS_per_atom_jk_ip1 kernel for {llll} failed')
+            kern_counts += 1
             if log.verbose >= logger.DEBUG1:
                 ntasks = npairs_ij * npairs_kl
                 msg = f'processing {llll} on Device {device_id} tasks ~= {ntasks}'
@@ -581,7 +601,8 @@ class Gradients(rhf_grad.GradientsBase):
         mf_grad = self.base._scf.nuc_grad_method()
         return mf_grad.grad_nuc(mol, atmlst)
 
-    def jk_energy_per_atom(self, dms, j_factor=None, k_factor=None, omega=0,
+    def jk_energy_per_atom(self, dms, j_factor=None, k_factor=None,
+                           omega=None, lr_factor=None, sr_factor=None,
                            hermi=0, verbose=None):
         '''
         Computes the sum of first-order derivatives of J/K contributions for
@@ -600,10 +621,12 @@ class Gradients(rhf_grad.GradientsBase):
         Returns:
             An array of shape (Natm, 3).
         '''
-        return self.jk_energies_per_atom(dms, j_factor, k_factor, omega,
+        return self.jk_energies_per_atom(dms, j_factor, k_factor,
+                                         omega, lr_factor, sr_factor,
                                          sum_results=True, verbose=verbose)
 
-    def jk_energies_per_atom(self, dm_list, j_factor=None, k_factor=None, omega=0,
+    def jk_energies_per_atom(self, dm_list, j_factor=None, k_factor=None,
+                             omega=None, lr_factor=None, sr_factor=None,
                              hermi=0, sum_results=False, verbose=None):
         '''
         Computes a set of first-order derivatives of J/K contributions for each
@@ -642,6 +665,7 @@ class Gradients(rhf_grad.GradientsBase):
         if isinstance(dm_list, cp.ndarray) and dm_list.ndim == 2:
             dm_list = dm_list[None]
         ejk = _jk_energies_per_atom(vhfopt, dm_list, j_factor, k_factor,
+                                    omega, lr_factor, sr_factor,
                                     sum_results, verbose)
         return ejk
 

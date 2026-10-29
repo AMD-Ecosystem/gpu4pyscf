@@ -30,9 +30,10 @@
 #define PTR_PBAS_IDX    4
 
 static __global__
-void bra_sorted2cart_kernel(double *out, double *input, double *recontract_coef,
+void bra_from_sorted_kernel(double *out, double *input, double *recontract_coef,
                             int *recontract_bas, int *pbas_idx_recontraction,
-                            int *c_ao_loc, int *p_ao_loc, int nbas, int npbas, int ncol)
+                            int *c_ao_loc, int *p_ao_loc,
+                            int nbas, int npbas, int ncol, int cart)
 {
     int thread_id = threadIdx.x;
     int col0 = blockIdx.x * COL_BLKSIZE;
@@ -40,7 +41,10 @@ void bra_sorted2cart_kernel(double *out, double *input, double *recontract_coef,
     int c_bas_id = blockIdx.y;
     int count = blockIdx.z;
     int li = recontract_bas[c_bas_id*BAS_SLOTS+ANG_OF];
-    int nfi = (li + 1) * (li + 2) / 2;
+    int nfi = 2 * li + 1;
+    if (cart) {
+        nfi = c_nf[li];
+    }
     int nprim = recontract_bas[c_bas_id*BAS_SLOTS+NPRIM_OF];
     int n_ctr = recontract_bas[c_bas_id*BAS_SLOTS+NCTR_OF ];
     int *pbas_idx = pbas_idx_recontraction + recontract_bas[c_bas_id*BAS_SLOTS+PTR_PBAS_IDX];
@@ -86,9 +90,10 @@ void bra_sorted2cart_kernel(double *out, double *input, double *recontract_coef,
 }
 
 static __global__
-void bra_cart2sorted_kernel(double *out, double *input, double *recontract_coef,
-                            int *recontract_bas, int *pbas_idx_recontraction,
-                            int *c_ao_loc, int *p_ao_loc, int nbas, int npbas, int ncol)
+void bra_to_sorted_kernel(double *out, double *input, double *recontract_coef,
+                          int *recontract_bas, int *pbas_idx_recontraction,
+                          int *c_ao_loc, int *p_ao_loc,
+                          int nbas, int npbas, int ncol, int cart)
 {
     int thread_id = threadIdx.x;
     int col0 = blockIdx.x * COL_BLKSIZE;
@@ -96,7 +101,10 @@ void bra_cart2sorted_kernel(double *out, double *input, double *recontract_coef,
     int c_bas_id = blockIdx.y;
     int count = blockIdx.z;
     int li = recontract_bas[c_bas_id*BAS_SLOTS+ANG_OF];
-    int nfi = (li + 1) * (li + 2) / 2;
+    int nfi = 2 * li + 1;
+    if (cart) {
+        nfi = c_nf[li];
+    }
     int nprim = recontract_bas[c_bas_id*BAS_SLOTS+NPRIM_OF];
     int n_ctr = recontract_bas[c_bas_id*BAS_SLOTS+NCTR_OF ];
     int *pbas_idx = pbas_idx_recontraction + recontract_bas[c_bas_id*BAS_SLOTS+PTR_PBAS_IDX];
@@ -151,7 +159,7 @@ void bra_sorted2sph_kernel(double *out, double *input, double *recontract_coef,
     int c_bas_id = blockIdx.y;
     int count = blockIdx.z;
     int li = recontract_bas[c_bas_id*BAS_SLOTS+ANG_OF];
-    int nfi = (li + 1) * (li + 2) / 2;
+    int nfi = c_nf[li];
     int di = li * 2 + 1;
     int nprim = recontract_bas[c_bas_id*BAS_SLOTS+NPRIM_OF];
     int n_ctr = recontract_bas[c_bas_id*BAS_SLOTS+NCTR_OF ];
@@ -863,9 +871,10 @@ void bra_sph2sorted_kernel(double *out, double *input, double *recontract_coef,
 }
 
 static __global__
-void ket_sorted2cart_kernel(double *out, double *input, double *recontract_coef,
+void ket_from_sorted_kernel(double *out, double *input, double *recontract_coef,
                             int *recontract_bas, int *pbas_idx_recontraction,
-                            int *c_ao_loc, int *p_ao_loc, int nbas, int npbas, int nrow)
+                            int *c_ao_loc, int *p_ao_loc,
+                            int nbas, int npbas, int nrow, int cart)
 {
     int tx = threadIdx.x;
     int ty = threadIdx.y;
@@ -877,7 +886,10 @@ void ket_sorted2cart_kernel(double *out, double *input, double *recontract_coef,
         c_bas_id = 0;
     }
     int li = recontract_bas[c_bas_id*BAS_SLOTS+ANG_OF];
-    int nfi = (li + 1) * (li + 2) / 2;
+    int nfi = 2 * li + 1;
+    if (cart) {
+        nfi = c_nf[li];
+    }
     int nprim = recontract_bas[c_bas_id*BAS_SLOTS+NPRIM_OF];
     int n_ctr = recontract_bas[c_bas_id*BAS_SLOTS+NCTR_OF ];
     int *pbas_idx = pbas_idx_recontraction + recontract_bas[c_bas_id*BAS_SLOTS+PTR_PBAS_IDX];
@@ -924,9 +936,10 @@ void ket_sorted2cart_kernel(double *out, double *input, double *recontract_coef,
 }
 
 static __global__
-void ket_cart2sorted_kernel(double *out, double *input, double *recontract_coef,
-                            int *recontract_bas, int *pbas_idx_recontraction,
-                            int *c_ao_loc, int *p_ao_loc, int nbas, int npbas, int nrow)
+void ket_to_sorted_kernel(double *out, double *input, double *recontract_coef,
+                          int *recontract_bas, int *pbas_idx_recontraction,
+                          int *c_ao_loc, int *p_ao_loc,
+                          int nbas, int npbas, int nrow, int cart)
 {
     int tx = threadIdx.x;
     int ty = threadIdx.y;
@@ -938,7 +951,10 @@ void ket_cart2sorted_kernel(double *out, double *input, double *recontract_coef,
         c_bas_id = 0;
     }
     int li = recontract_bas[c_bas_id*BAS_SLOTS+ANG_OF];
-    int nfi = (li + 1) * (li + 2) / 2;
+    int nfi = 2 * li + 1;
+    if (cart) {
+        nfi = c_nf[li];
+    }
     int nprim = recontract_bas[c_bas_id*BAS_SLOTS+NPRIM_OF];
     int n_ctr = recontract_bas[c_bas_id*BAS_SLOTS+NCTR_OF ];
     int *pbas_idx = pbas_idx_recontraction + recontract_bas[c_bas_id*BAS_SLOTS+PTR_PBAS_IDX];
@@ -996,7 +1012,7 @@ void ket_sorted2sph_kernel(double *out, double *input, double *recontract_coef,
         c_bas_id = 0;
     }
     int li = recontract_bas[c_bas_id*BAS_SLOTS+ANG_OF];
-    int nfi = (li + 1) * (li + 2) / 2;
+    int nfi = c_nf[li];
     int di = li * 2 + 1;
     int nprim = recontract_bas[c_bas_id*BAS_SLOTS+NPRIM_OF];
     int n_ctr = recontract_bas[c_bas_id*BAS_SLOTS+NCTR_OF ];
@@ -1715,66 +1731,47 @@ void ket_sph2sorted_kernel(double *out, double *input, double *recontract_coef,
     }
 }
 
-#ifdef USE_HIP
-// Probe the upper bound of get_smid() (HIP __smid(), the hardware CU-slot id).
-// On AMD GPUs __smid() can exceed multiProcessorCount because the (SE,CU) id
-// packing is sparse, so a scratch pool indexed by get_smid()*POOL_SIZE must be
-// sized to this id range, not to the active-CU count. Each resident block
-// records its slot id; a brief spin keeps many blocks co-resident so the launch
-// visits the full set of CU slots the scheduler can use.
-static __global__
-void probe_smid_kernel(unsigned *out_max)
-{
-    unsigned long long t0 = clock64();
-    while (clock64() - t0 < 1000000ULL) { /* keep this block resident briefly */ }
-    if (threadIdx.x == 0) {
-        atomicMax(out_max, get_smid());
-    }
-}
-#endif
-
 extern "C" {
-#ifdef USE_HIP
-// Returns max(get_smid()) + 1 observed on the current device: the number of
-// scratch-pool slots a get_smid()-indexed kernel can address. Caller sizes the
-// pool to this value (with margin) instead of multiProcessorCount.
-int probe_smid_range(int multiProcessorCount)
+int bra_from_sorted(double *out, double *input, double *recontract_coef,
+                    int *recontract_bas, int *pbas_idx_recontraction,
+                    int *c_ao_loc, int *p_ao_loc,
+                    int nbas, int npbas, int ncol, int counts, int cart)
 {
-    unsigned *d_max = nullptr;
-    if (cudaMalloc(&d_max, sizeof(unsigned)) != cudaSuccess) {
-        return -1;
-    }
-    cudaMemset(d_max, 0, sizeof(unsigned));
-    int blocks = multiProcessorCount > 0 ? multiProcessorCount * 8 : 1024;
-    probe_smid_kernel<<<blocks, THREADS>>>(d_max);
+    int nbatch_col = (ncol + COL_BLKSIZE-1) / COL_BLKSIZE;
+    dim3 blocks(nbatch_col, nbas, counts);
+    bra_from_sorted_kernel<<<blocks, THREADS>>>(
+            out, input, recontract_coef, recontract_bas, pbas_idx_recontraction,
+            c_ao_loc, p_ao_loc, nbas, npbas, ncol, cart);
     cudaError_t err = cudaGetLastError();
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
     if (err != cudaSuccess) {
-        fprintf(stderr, "CUDA Error in probe_smid_kernel: %s\n", cudaGetErrorString(err));
-        cudaFree(d_max);
-        return -1;
+        fprintf(stderr, "CUDA Error in bra_from_sorted kernel: %s\n", cudaGetErrorString(err));
+        return 1;
     }
-    unsigned h_max = 0;
-    cudaMemcpy(&h_max, d_max, sizeof(unsigned), cudaMemcpyDeviceToHost);
-    cudaFree(d_max);
-    return (int)h_max + 1;
+    return 0;
 }
-#endif
 
 int bra_sorted2cart(double *out, double *input, double *recontract_coef,
                     int *recontract_bas, int *pbas_idx_recontraction,
                     int *c_ao_loc, int *p_ao_loc, int nbas, int npbas, int ncol, int counts)
 {
+    return bra_from_sorted(
+            out, input, recontract_coef, recontract_bas, pbas_idx_recontraction,
+            c_ao_loc, p_ao_loc, nbas, npbas, ncol, counts, 1);
+}
+
+int bra_to_sorted(double *out, double *input, double *recontract_coef,
+                  int *recontract_bas, int *pbas_idx_recontraction,
+                  int *c_ao_loc, int *p_ao_loc,
+                  int nbas, int npbas, int ncol, int counts, int cart)
+{
     int nbatch_col = (ncol + COL_BLKSIZE-1) / COL_BLKSIZE;
     dim3 blocks(nbatch_col, nbas, counts);
-    bra_sorted2cart_kernel<<<blocks, THREADS>>>(
+    bra_to_sorted_kernel<<<blocks, THREADS>>>(
             out, input, recontract_coef, recontract_bas, pbas_idx_recontraction,
-            c_ao_loc, p_ao_loc, nbas, npbas, ncol);
+            c_ao_loc, p_ao_loc, nbas, npbas, ncol, cart);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        fprintf(stderr, "CUDA Error in bra_sorted2cart kernel: %s\n", cudaGetErrorString(err));
+        fprintf(stderr, "CUDA Error in bra_cart2sorted kernel: %s\n", cudaGetErrorString(err));
         return 1;
     }
     return 0;
@@ -1784,17 +1781,9 @@ int bra_cart2sorted(double *out, double *input, double *recontract_coef,
                     int *recontract_bas, int *pbas_idx_recontraction,
                     int *c_ao_loc, int *p_ao_loc, int nbas, int npbas, int ncol, int counts)
 {
-    int nbatch_col = (ncol + COL_BLKSIZE-1) / COL_BLKSIZE;
-    dim3 blocks(nbatch_col, nbas, counts);
-    bra_cart2sorted_kernel<<<blocks, THREADS>>>(
+    return bra_to_sorted(
             out, input, recontract_coef, recontract_bas, pbas_idx_recontraction,
-            c_ao_loc, p_ao_loc, nbas, npbas, ncol);
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "CUDA Error in bra_cart2sorted kernel: %s\n", cudaGetErrorString(err));
-        return 1;
-    }
-    return 0;
+            c_ao_loc, p_ao_loc, nbas, npbas, ncol, counts, 1);
 }
 
 int bra_sorted2sph(double *out, double *input, double *recontract_coef,
@@ -1831,18 +1820,44 @@ int bra_sph2sorted(double *out, double *input, double *recontract_coef,
     return 0;
 }
 
+int ket_from_sorted(double *out, double *input, double *recontract_coef,
+                    int *recontract_bas, int *pbas_idx_recontraction,
+                    int *c_ao_loc, int *p_ao_loc, int nbas, int npbas, int nrow, int cart)
+{
+    dim3 threads(TILE_X, TILE_Y);
+    dim3 blocks((nrow+ROW_BLKSIZE-1)/ROW_BLKSIZE, (nbas+TILE_X-1)/TILE_X);
+    ket_from_sorted_kernel<<<blocks, threads>>>(
+            out, input, recontract_coef, recontract_bas, pbas_idx_recontraction,
+            c_ao_loc, p_ao_loc, nbas, npbas, nrow, cart);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA Error in ket_sorted2cart kernel: %s\n", cudaGetErrorString(err));
+        return 1;
+    }
+    return 0;
+}
+
 int ket_sorted2cart(double *out, double *input, double *recontract_coef,
                     int *recontract_bas, int *pbas_idx_recontraction,
                     int *c_ao_loc, int *p_ao_loc, int nbas, int npbas, int nrow)
 {
+    return ket_from_sorted(
+            out, input, recontract_coef, recontract_bas, pbas_idx_recontraction,
+            c_ao_loc, p_ao_loc, nbas, npbas, nrow, 1);
+}
+
+int ket_to_sorted(double *out, double *input, double *recontract_coef,
+                  int *recontract_bas, int *pbas_idx_recontraction,
+                  int *c_ao_loc, int *p_ao_loc, int nbas, int npbas, int nrow, int cart)
+{
     dim3 threads(TILE_X, TILE_Y);
     dim3 blocks((nrow+ROW_BLKSIZE-1)/ROW_BLKSIZE, (nbas+TILE_X-1)/TILE_X);
-    ket_sorted2cart_kernel<<<blocks, threads>>>(
+    ket_to_sorted_kernel<<<blocks, threads>>>(
             out, input, recontract_coef, recontract_bas, pbas_idx_recontraction,
-            c_ao_loc, p_ao_loc, nbas, npbas, nrow);
+            c_ao_loc, p_ao_loc, nbas, npbas, nrow, cart);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        fprintf(stderr, "CUDA Error in ket_sorted2cart kernel: %s\n", cudaGetErrorString(err));
+        fprintf(stderr, "CUDA Error in ket_cart2sorted kernel: %s\n", cudaGetErrorString(err));
         return 1;
     }
     return 0;
@@ -1852,17 +1867,9 @@ int ket_cart2sorted(double *out, double *input, double *recontract_coef,
                     int *recontract_bas, int *pbas_idx_recontraction,
                     int *c_ao_loc, int *p_ao_loc, int nbas, int npbas, int nrow)
 {
-    dim3 threads(TILE_X, TILE_Y);
-    dim3 blocks((nrow+ROW_BLKSIZE-1)/ROW_BLKSIZE, (nbas+TILE_X-1)/TILE_X);
-    ket_cart2sorted_kernel<<<blocks, threads>>>(
+    return ket_to_sorted(
             out, input, recontract_coef, recontract_bas, pbas_idx_recontraction,
-            c_ao_loc, p_ao_loc, nbas, npbas, nrow);
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "CUDA Error in ket_cart2sorted kernel: %s\n", cudaGetErrorString(err));
-        return 1;
-    }
-    return 0;
+            c_ao_loc, p_ao_loc, nbas, npbas, nrow, 1);
 }
 
 int ket_sorted2sph(double *out, double *input, double *recontract_coef,
@@ -1897,5 +1904,32 @@ int ket_sph2sorted(double *out, double *input, double *recontract_coef,
         return 1;
     }
     return 0;
+}
+
+void get_orig_shell_idx(int *shell_idx, int *orig_bas, int orig_nbas,
+                        int *recontract_bas, int *recontraction_idx)
+{
+    int recon_sh = 0;
+    for (int orig_sh = 0; orig_sh < orig_nbas; ++orig_sh) {
+        int remaining_ctr = orig_bas[orig_sh * BAS_SLOTS + NCTR_OF];
+/* A recontract_bas row does not always correspond to one original shell. With
+ * decontract=False, a generally contracted shell is split into one
+ * segment-contracted shell per contraction.
+ *
+ * For example, two original shells with NCTR_OF = [2, 1] produce three
+ * recontract_bas rows, each with NCTR_OF = 1. Their original shell indices are
+ * [0, 0, 1], not [0, 1, 2]. */
+        while (remaining_ctr > 0) {
+            int *shell = recontract_bas + recon_sh * BAS_SLOTS;
+            int p0 = shell[PTR_PBAS_IDX];
+            int p1 = p0 + shell[NPRIM_OF];
+
+            for (int p = p0; p < p1; ++p) {
+                shell_idx[recontraction_idx[p]] = orig_sh;
+            }
+            remaining_ctr -= shell[NCTR_OF];
+            ++recon_sh;
+        }
+    }
 }
 }

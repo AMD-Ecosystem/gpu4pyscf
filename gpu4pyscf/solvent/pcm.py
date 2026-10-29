@@ -24,16 +24,26 @@ from cupyx.scipy.special import erf
 from pyscf import lib
 from pyscf import gto
 from pyscf.dft import gen_grid
+from pyscf.dft.LebedevGrid import LEBEDEV_ORDER, MakeAngularGrid
 from pyscf.data import radii
+from pyscf.data.elements import is_ghost_atom
+from pyscf.data.elements import charge as charge_of_element
 from gpu4pyscf.solvent import _attach_solvent
+from gpu4pyscf.solvent._solvent_data import solvent_db, resolve_solvent_name
 from gpu4pyscf.gto import int3c1e
 from gpu4pyscf.gto.int3c1e import int1e_grids
-from gpu4pyscf.lib import logger
+from gpu4pyscf.lib import logger, utils
 from gpu4pyscf.lib.cupy_helper import dist_matrix, load_library
 from cupyx.scipy.linalg import lu_factor, lu_solve
 from cupyx.scipy.sparse.linalg import LinearOperator, gmres, minres
 
-libdft = lib.load_library('libdft')
+# Static (zero-frequency) dielectric constant of water at 298 K
+EPS_WATER = 78.3553
+
+# Optical (high-frequency) dielectric constant of water, roughly the square of
+# its refractive index. See the QChem manual, the non-equilibrium PCM section.
+EPS_OPTICAL_WATER = 1.78
+
 try:
     libsolvent = load_library('libsolvent')
 except OSError:
@@ -41,6 +51,8 @@ except OSError:
 
 @lib.with_doc(_attach_solvent._for_scf.__doc__)
 def pcm_for_scf(mf, solvent_obj=None, dm=None):
+    if isinstance(solvent_obj, str):
+        solvent_obj = PCM(mf.mol, solvent_obj)
     if solvent_obj is None:
         solvent_obj = PCM(mf.mol)
     return _attach_solvent._for_scf(mf, solvent_obj, dm)
@@ -57,6 +69,20 @@ from gpu4pyscf import tdscf
 scf.hf.RHF.PCM = pcm_for_scf
 scf.uhf.UHF.PCM = pcm_for_scf
 tdscf.rhf.TDBase.PCM = pcm_for_tdscf
+
+def natm_without_ghost(mol):
+    return sum(1 for element in mol.elements if not is_ghost_atom(element))
+
+def atom_coords_without_ghost(mol, unit='Bohr'):
+    nonghost_mask = [not is_ghost_atom(element) for element in mol.elements]
+    return mol.atom_coords(unit=unit)[nonghost_mask]
+
+def atom_charges_without_ghost(mol):
+    nonghost_mask = [not is_ghost_atom(element) for element in mol.elements]
+    return mol.atom_charges()[nonghost_mask]
+
+def element_index_without_ghost(mol):
+    return [charge_of_element(e) for e in mol.elements if not is_ghost_atom(e)]
 
 # TABLE II,  J. Chem. Phys. 122, 194110 (2005)
 XI = {
@@ -109,14 +135,14 @@ def switch_h(x):
 
 def gen_surface(mol, ng=302, rad=modified_Bondi, surface_discretization_method = "SWIG"):
     '''J. Phys. Chem. A 1999, 103, 11060-11079'''
-    unit_sphere = numpy.empty((ng,4))
-    libdft.MakeAngularGrid(unit_sphere.ctypes.data_as(ctypes.c_void_p), ctypes.c_int(ng))
-    unit_sphere = cupy.asarray(unit_sphere)
+    unit_sphere = cupy.asarray(MakeAngularGrid(ng))
 
-    atom_coords = cupy.asarray(mol.atom_coords(unit='B'))
-    N_J = ng * cupy.ones(mol.natm)
-    from pyscf.data.elements import charge as charge_of_element
-    element_index = [charge_of_element(e) for e in mol.elements]
+    natm = natm_without_ghost(mol)
+    if natm != mol.natm:
+        logger.warn(mol, f"{mol.natm - natm} ghost atoms detected. PCM grids are assigned to real atoms only.")
+    atom_coords = cupy.asarray(atom_coords_without_ghost(mol))
+    N_J = ng * cupy.ones(natm)
+    element_index = element_index_without_ghost(mol)
     R_J = cupy.asarray([rad[chg] for chg in element_index])
     if surface_discretization_method.upper() == "SWIG":
         R_sw_J = R_J * (14.0 / N_J)**0.5
@@ -132,7 +158,7 @@ def gen_surface(mol, ng=302, rad=modified_Bondi, surface_discretization_method =
     area = []
     gslice_by_atom = []
     p0 = p1 = 0
-    for ia in range(mol.natm):
+    for ia in range(natm):
         r_vdw = R_J[ia]
 
         atom_grid = r_vdw * unit_sphere[:,:3] + atom_coords[ia,:]
@@ -307,7 +333,6 @@ def left_solve_S(surface, right_vector, conv_tol = 1e-10, transpose = None, stre
     else:
         S_diag = surface["S_diag"]
     n = charge_exp.shape[0]
-    assert right_vector.size == n
 
     def _left_multiply_S(v):
         return left_multiply_S(surface, v, stream = stream)
@@ -323,6 +348,8 @@ def left_solve_S(surface, right_vector, conv_tol = 1e-10, transpose = None, stre
     preconditioner_S = LinearOperator(shape = (n, n),
                                       matvec = _S_preconditioner,
                                       dtype = right_vector.dtype)
+
+    assert right_vector.size == n
     b = right_vector.reshape(n)
     x0 = _S_preconditioner(b)
     solution, info = minres(operator_S, b, x0, tol = conv_tol, M = preconditioner_S, maxiter = 100)
@@ -440,19 +467,37 @@ def left_solve_K_SSVPE(surface, _intermediates, right_vector, conv_tol = 1e-10, 
     solution = solution.reshape(right_vector.shape)
     return solution
 
+def from_cpu(method):
+    out = lib.to_gpu(method, out=PCM(method.mol))
+    out.reset()
+    out.eps = method.eps
+    out.eps_optical = getattr(method, 'eps_optical', None)
+    return out
+
 class PCM(lib.StreamObject):
-    from gpu4pyscf.lib.utils import to_gpu, device, to_cpu
+    '''PCM with optional dielectric overrides.
+
+    Attributes ``eps`` and ``eps_optical`` can be overwritten.
+
+    Changing ``solvent`` preserves overrides. Setting them to ``None`` can
+    restore its default.
+    '''
+
+    solvent = ''
+    eps_optical = None
+
+    from gpu4pyscf.lib.utils import to_gpu, device
 
     _keys = {
         'method', 'vdw_scale', 'surface', 'r_probe', 'intopt',
         'mol', 'radii_table', 'atom_radii', 'lebedev_order', 'lmax', 'eta',
-        'eps', 'max_cycle', 'conv_tol', 'state_id', 'frozen',
+        'solvent', 'eps', 'eps_optical', 'max_cycle', 'conv_tol', 'state_id', 'frozen',
         'frozen_dm0_for_finite_difference_without_response',
         'equilibrium_solvation', 'e', 'v', 'v_grids_n',
         'lowmem_intermediate_storage', 'surface_discretization_method',
     }
 
-    def __init__(self, mol):
+    def __init__(self, mol, solvent=None):
         self.mol = mol
         self.stdout = mol.stdout
         self.verbose = mol.verbose
@@ -464,9 +509,9 @@ class PCM(lib.StreamObject):
         self.r_probe = 0.0
         self.radii_table = None
         self.lebedev_order = 29
-        self._intermediates = {}
         self.lowmem_intermediate_storage = False
-        self.eps = 78.3553
+        self.eps = None
+        self.solvent = solvent or ''
         self.surface_discretization_method = "SWIG"
 
         self.max_cycle = 20
@@ -480,12 +525,53 @@ class PCM(lib.StreamObject):
         self.e = None
         self.v = None
         self.v_grids_n = None
+        self._intermediates = {}
+
+    def __setattr__(self, key, val):
+        if key == 'solvent':
+            val = self._set_solvent(val)
+        super().__setattr__(key, val)
+        if key in ('solvent', 'eps', 'eps_optical'):
+            self.reset()
+
+    def _set_solvent(self, solvent):
+        return resolve_solvent_name(solvent)
+
+    def get_eps(self):
+        '''Return the static dielectric constant.'''
+        if self.eps is not None:
+            return self.eps
+        if self.solvent:
+            return solvent_db[self.solvent][5]
+        return EPS_WATER
+
+    def get_eps_optical(self):
+        '''The optical (high-frequency) dielectric constant of the solvent.
+
+        Only the fast, electronic part of the solvent polarization follows a
+        vertical excitation. Its response is governed by the optical dielectric
+        constant rather than the static one (see .equilibrium_solvation).
+        '''
+        if self.eps_optical is not None:
+            return self.eps_optical
+        if self.solvent:
+            return solvent_db[self.solvent][0]**2
+        eps = self.get_eps()
+        if abs(eps - EPS_WATER) > 1e-6:
+            logger.warn(self, 'eps_optical was not specified for eps=%g. The '
+                        'optical dielectric constant of water (%g) is applied '
+                        'in the non-equilibrium solvation. Please set '
+                        '.eps_optical to the square of the refractive index of '
+                        'the solvent in use.', eps, EPS_OPTICAL_WATER)
+        return EPS_OPTICAL_WATER
 
     def dump_flags(self, verbose=None):
         logger.info(self, '******** %s ********', self.__class__)
         logger.info(self, 'lebedev_order = %s (%d grids per sphere)',
-                    self.lebedev_order, gen_grid.LEBEDEV_ORDER[self.lebedev_order])
-        logger.info(self, 'eps = %s'          , self.eps)
+                    self.lebedev_order, LEBEDEV_ORDER[self.lebedev_order])
+        logger.info(self, 'solvent = %s', self.solvent)
+        logger.info(self, 'eps_optical = %s', self.get_eps_optical())
+        logger.info(self, 'eps = %s', self.get_eps())
         logger.info(self, 'frozen = %s'       , self.frozen)
         logger.info(self, 'equilibrium_solvation = %s', self.equilibrium_solvation)
         logger.debug2(self, 'radii_table %s', self.radii_table)
@@ -500,13 +586,13 @@ class PCM(lib.StreamObject):
             self.radii_table = vdw_scale * modified_Bondi + self.r_probe
         mol = self.mol
         if ng is None:
-            ng = gen_grid.LEBEDEV_ORDER[self.lebedev_order]
+            ng = LEBEDEV_ORDER[self.lebedev_order]
 
         self.surface = gen_surface(mol, rad=self.radii_table, ng=ng,
                                    surface_discretization_method = self.surface_discretization_method)
         self._intermediates = {}
 
-        epsilon = self.eps
+        epsilon = self.get_eps()
         inf = float('inf')
         if self.method.upper() in ['C-PCM', 'CPCM']:
             f_epsilon = (epsilon-1.)/epsilon if epsilon != inf else 1.0
@@ -573,8 +659,8 @@ class PCM(lib.StreamObject):
 
         charge_exp  = self.surface['charge_exp']
         grid_coords = self.surface['grid_coords']
-        atom_coords = mol.atom_coords(unit='B')
-        atom_charges = mol.atom_charges()
+        atom_coords = atom_coords_without_ghost(mol)
+        atom_charges = atom_charges_without_ghost(mol)
 
         intopt = int3c1e.VHFOpt(mol)
         intopt.build(1e-14)
@@ -586,6 +672,12 @@ class PCM(lib.StreamObject):
         v_ng = gto.mole.intor_cross(int2c2e, fakemol_nuc, fakemol_charge)
         v_grids_n = numpy.dot(atom_charges, v_ng)
         self.v_grids_n = cupy.asarray(v_grids_n)
+
+    @property
+    def ngrids(self):
+        if self.surface is None or 'grid_coords' not in self.surface:
+            self.build()
+        return self.surface['grid_coords'].shape[0]
 
     def kernel(self, dm):
         self.e, self.v = self._get_vind(dm)
@@ -719,6 +811,9 @@ class PCM(lib.StreamObject):
         self._intermediates = None
         self.surface = None
         self.intopt = None
+        self.e = None
+        self.v = None
+        self.v_grids_n = None
         self.frozen_dm0_for_finite_difference_without_response = None
         return self
 
@@ -787,3 +882,11 @@ class PCM(lib.StreamObject):
                 return left_solve_K_SSVPE(self.surface, self._intermediates, right_vector, self.conv_tol)
             else:
                 raise RuntimeError(f"Unknown implicit solvent model: {self.method}")
+
+    def to_cpu(self):
+        from pyscf.solvent.pcm import PCM
+        out = utils.to_cpu(self, PCM(self.mol))
+        out.reset()
+        out.eps = self.get_eps()
+        out.eps_optical = self.get_eps_optical()
+        return out

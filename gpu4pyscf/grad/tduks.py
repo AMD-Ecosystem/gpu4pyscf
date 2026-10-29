@@ -16,7 +16,7 @@
 from functools import reduce
 import cupy as cp
 import numpy as np
-from pyscf import lib
+from pyscf import lib, gto
 from pyscf.dft.numint import NumInt as numint_cpu
 from gpu4pyscf.lib.cupy_helper import contract
 from gpu4pyscf.lib import logger
@@ -261,10 +261,12 @@ def grad_elec(td_grad, x_y, singlet=True, atmlst=None, verbose=logger.INFO,
 
     dh1e_ground = int3c2e.get_dh1e(mol, oo0a + oo0b)  # 1/r like terms
     if len(mol._ecpbas) > 0:
-        dh1e_ground += rhf_grad.get_dh1e_ecp(mol, oo0a + oo0b)  # 1/r like terms
+        ecp_atoms = np.unique(mol._ecpbas[:, gto.ATOM_OF])
+        dh1e_ground[ecp_atoms] += rhf_grad.get_dh1e_ecp(mol, oo0a + oo0b)  # 1/r like terms
     dh1e_td = int3c2e.get_dh1e(mol, (dmz1dooa + dmz1doob) * 0.25 + (dmz1dooa + dmz1doob).T * 0.25)  # 1/r like terms
     if len(mol._ecpbas) > 0:
-        dh1e_td += rhf_grad.get_dh1e_ecp(
+        ecp_atoms = np.unique(mol._ecpbas[:, gto.ATOM_OF])
+        dh1e_td[ecp_atoms] += rhf_grad.get_dh1e_ecp(
             mol, (dmz1dooa + dmz1doob) * 0.25 + (dmz1dooa + dmz1doob).T * 0.25)  # 1/r like terms
 
     if mol._pseudo:
@@ -407,20 +409,7 @@ def _contract_xc_kernel(td_grad, xc_code, dmvo, dmoo=None, with_vxc=True, with_k
         rho = cp.asarray((
             ni.eval_rho2(_sorted_mol, ao0, mo_coeff_mask_a, mo_occ[0], mask, xctype,with_lapl=False),
             ni.eval_rho2(_sorted_mol, ao0, mo_coeff_mask_b, mo_occ[1], mask, xctype, with_lapl=False)))
-        if deriv > 2:
-            whether_use_gpu = os.environ.get('LIBXC_ON_GPU', '0') == '1'
-            if not whether_use_gpu:
-                ni_cpu = numint_cpu()
-                # TODO: If the libxc is stablized, this should be gpulized
-                # vxc, fxc, kxc = ni.eval_xc_eff(xc_code, rho, deriv, xctype=xctype)[1:]
-                vxc, fxc, kxc = ni_cpu.eval_xc_eff(xc_code, rho.get(), deriv, xctype=xctype)[1:]
-                vxc = cp.asarray(vxc)
-                fxc = cp.asarray(fxc)
-                kxc = cp.asarray(kxc)
-            else:
-                vxc, fxc, kxc = ni.eval_xc_eff(xc_code, rho, deriv, xctype=xctype)[1:]
-        else:
-            vxc, fxc, kxc = ni.eval_xc_eff(xc_code, rho, deriv, xctype=xctype)[1:]
+        vxc, fxc, kxc = ni.eval_xc_eff(xc_code, rho, deriv, xctype=xctype, spin=1)[1:]
         dmvo_mask_a = dmvo[0, mask[:, None], mask]
         dmvo_mask_b = dmvo[1, mask[:, None], mask]
         rho1 = cp.asarray((

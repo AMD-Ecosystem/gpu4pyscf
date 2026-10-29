@@ -31,7 +31,7 @@ from gpu4pyscf.pbc.scf import hf as pbchf, khf
 from gpu4pyscf.pbc.df.df import GDF
 from gpu4pyscf.pbc.dft import gen_grid
 from gpu4pyscf.pbc.dft import numint
-from gpu4pyscf.pbc.dft import multigrid, multigrid_v2
+from gpu4pyscf.pbc.dft import multigrid, multigrid_v3
 from gpu4pyscf.lib.cupy_helper import tag_array, get_avail_mem
 from pyscf import __config__
 
@@ -69,7 +69,7 @@ def get_veff(ks, cell=None, dm=None, dm_last=None, vhf_last=None, hermi=1,
     ni = ks._numint
     hybrid = ni.libxc.is_hybrid_xc(ks.xc)
 
-    if isinstance(ni, (multigrid_v2.MultiGridNumInt, multigrid.MultiGridNumInt)):
+    if isinstance(ni, multigrid.MultiGridNumIntBase):
         if ks.do_nlc():
             raise NotImplementedError(f'MultiGrid for NLC functional {ks.xc} + {ks.nlc}')
         n, exc, vxc = ni.nr_rks(
@@ -160,6 +160,7 @@ class KohnShamDFT(mol_ks.KohnShamDFT):
             self.kpt = self.__dict__.pop('kpt')
 
         kpts = self.kpts
+        khf._check_kpts(kpts)
         # for GDF and MDF
         with_df = self.with_df
         if (isinstance(with_df, GDF) and
@@ -268,7 +269,7 @@ class RKS(KohnShamDFT, pbchf.RHF):
     def multigrid_numint(self, mesh=None):
         '''Apply the MultiGrid algorithm for XC numerical integartion'''
         mf = self.copy()
-        mf._numint = multigrid_v2.MultiGridNumInt(self.cell)
+        mf._numint = multigrid_v3.MultiGridNumInt(self.cell)
         if mesh is not None:
             mf._numint.mesh = mesh
         return mf
@@ -281,3 +282,53 @@ class RKS(KohnShamDFT, pbchf.RHF):
         mf = rks_cpu.RKS(self.cell)
         utils.to_cpu(self, out=mf)
         return mf
+
+    def gen_response(self, mo_coeff=None, mo_occ=None,
+                     singlet=None, hermi=0, max_memory=None, with_nlc=False):
+        from gpu4pyscf.pbc.dft.krks import _get_jk
+        if mo_coeff is None: mo_coeff = self.mo_coeff
+        if mo_occ is None: mo_occ = self.mo_occ
+        cell = self.cell
+        kpts = self.kpt.reshape(1, 3)
+
+        if with_nlc and self.do_nlc():
+            raise NotImplementedError
+
+        ni = self._numint
+        hybrid = ni.libxc.is_hybrid_xc(self.xc)
+
+        if singlet is None:  # for newton solver
+            spin = 0
+        else:
+            spin = 1
+        dm0 = self.make_rdm1(mo_coeff, mo_occ)
+        rho0, vxc, fxc = ni.cache_xc_kernel1(
+            cell, self.grids, self.xc, dm0[None], spin, kpts, is_rhf=True)
+        if singlet is not None:
+            fxc *= .5
+        nao = dm0.shape[-1]
+        dm0 = None
+
+        with_j = (singlet is None or singlet) and hermi != 2
+        j_in_xc = isinstance(ni, multigrid.MultiGridNumIntBase)
+
+        def vind(dm1):
+            dm1_shape = dm1.shape
+            dm1 = dm1.reshape(1,1,nao,nao)
+            if with_j:
+                if singlet is None:
+                    v1 = ni.nr_rks_fxc(cell, self.grids, self.xc, dm0, dm1, hermi,
+                                       fxc, kpts, with_j=j_in_xc)
+                else:
+                    v1 = ni.nr_rks_fxc(cell, self.grids, self.xc, dm0, dm1, hermi,
+                                       singlet, fxc, kpts, with_j=j_in_xc)
+            else:
+                v1 = cp.zeros_like(dm1)
+
+            vj, vk = _get_jk(self, cell, dm1, hermi, kpts, with_j=not j_in_xc)[:2]
+            if with_j and not j_in_xc:
+                v1 += vj
+            if hybrid:
+                v1 -= .5 * vk
+            return v1.reshape(dm1_shape)
+        return vind

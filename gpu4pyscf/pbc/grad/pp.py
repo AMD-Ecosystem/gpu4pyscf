@@ -13,93 +13,132 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy
+import ctypes
+import numpy as np
 import cupy as cp
-from gpu4pyscf.lib import logger
 from pyscf.pbc.lib.kpts_helper import gamma_point
-from pyscf.pbc.gto.pseudo.pp_int import fake_cell_vnl
+from pyscf.pbc.tools.k2gamma import translation_vectors_for_kmesh
+from gpu4pyscf.lib.cupy_helper import contract, asarray
+from gpu4pyscf.gto.mole import SortedGTO
+from gpu4pyscf.pbc.gto.pseudo.pp_int import _int_vnl_gpu, _sorted_fake_cell_vnl
+from gpu4pyscf.pbc.gto import int1e
+from gpu4pyscf.pbc.gto.int1e import libpbc
+from gpu4pyscf.pbc.tools import k2gamma
 
 def vppnl_nuc_grad(cell, dm, kpts=None):
     '''Nuclear gradients of the non-local part of the GTH pseudo potential,
     contracted with the density matrix.
+    '''
+    return ppnl_derivatives(cell, dm, kpts)[:-3]
 
-    Uses GPU CUDA kernels for the r^2/r^4 moment integrals at gamma point,
-    with CPU fallback via pyscf _int_vnl for multi-k-point calculations.
+def ppnl_derivatives(cell, dm, kpts=None):
+    '''Nonlocal GTH atomic and strain derivatives, averaged over k-points.
+
+    Returns a real (natm+3, 3) array: nuclear gradients followed by dE/d(strain_xy)
     '''
     if kpts is None:
-        kpts_lst = numpy.zeros((1, 3))
+        kpts = np.zeros((1, 3))
     else:
-        kpts_lst = numpy.reshape(kpts, (-1, 3))
+        kpts = np.reshape(kpts, (-1, 3))
+    is_gamma_point = gamma_point(kpts)
+    nkpts = len(kpts)
 
-    dm = cp.asarray(dm)
-    fakecell, hl_blocks = fake_cell_vnl(cell)
-
-    intors_d = ('int1e_ipovlp', 'int1e_r2_origi_ip2', 'int1e_r4_origi_ip2')
-    if gamma_point(kpts_lst):
-        from gpu4pyscf.pbc.gto.pseudo.pp_int import _int_vnl_gpu
-        ppnl_half = _int_vnl_gpu(cell, fakecell, hl_blocks, kpts_lst)
-        ppnl_half_ip2 = _int_vnl_gpu(cell, fakecell, hl_blocks, kpts_lst, intors_d, comp=3)
-    else:
-        from pyscf.pbc.gto.pseudo.pp_int import _int_vnl
-        ppnl_half = _int_vnl(cell, fakecell, hl_blocks, kpts_lst)
-        ppnl_half_ip2 = _int_vnl(cell, fakecell, hl_blocks, kpts_lst, intors_d, comp=3)
-    if len(ppnl_half_ip2[0]) > 0:
-        for k in range(len(kpts_lst)):
-            ppnl_half_ip2[0][k] *= -1
-
-    # Move integral arrays to GPU
-    def _to_gpu(arrs):
-        return [cp.asarray(a) if len(a) > 0 else a for a in arrs]
-    ppnl_half = _to_gpu(ppnl_half)
-    ppnl_half_ip2 = _to_gpu(ppnl_half_ip2)
-
-    nkpts = len(kpts_lst)
-    nao = cell.nao_nr()
-
-    dm = dm.reshape(-1, nao, nao)
-    if gamma_point(kpts_lst):
+    nao = cell.nao
+    dm = cp.asarray(dm).reshape(-1, nao, nao)
+    if len(dm) != nkpts:
+        raise ValueError('Expected one density matrix per k-point')
+    if is_gamma_point:
         dm = dm.real
-    dm_dmH = dm + dm.transpose(0, 2, 1).conj()
+    dm_dmH = dm + dm.conj().transpose(0, 2, 1)
 
-    grad = cp.zeros([cell.natm, 3], dtype=cp.complex128)
-    dppnl = cp.zeros((nkpts, 3, nao, nao), dtype=cp.complex128)
+    grad_sigma = np.zeros((cell.natm+3, 3))
 
-    for k in range(nkpts):
-        offset = [0] * 3
-        for ib, hl in enumerate(hl_blocks):
-            l = fakecell.bas_angular(ib)
-            nd = 2 * l + 1
-            hl_dim = hl.shape[0]
-            hl_gpu = cp.asarray(hl)
+    fakecell, hl_blocks, pattern, splits = _sorted_fake_cell_vnl(cell)
+    if not hl_blocks:
+        return grad_sigma
 
-            ilp = cp.zeros((hl_dim, nd, nao), dtype=cp.complex128)
-            dilp = cp.zeros((hl_dim, 3, nd, nao), dtype=cp.complex128)
-            for i in range(hl_dim):
-                p0 = offset[i]
-                if len(ppnl_half[i]) > 0:
-                    ilp[i] = ppnl_half[i][k, p0:p0+nd]
-                if len(ppnl_half_ip2[i]) > 0:
-                    dilp[i] = ppnl_half_ip2[i][k, :, p0:p0+nd]
-                offset[i] = p0 + nd
+    sorted_cell = SortedGTO.from_cell(cell, decontract=True)
+    ppnl_half = _int_vnl_gpu(sorted_cell, fakecell, hl_blocks, kpts)
 
-            # dppnl_k[d,p,q] = sum_{i,j,l} dilp[i,d,l,p].conj() * hl[i,j] * ilp[j,l,q]
-            dppnl_k = cp.einsum('idlp,ij,jlq->dpq', dilp.conj(), hl_gpu, ilp)
-            dppnl[k] += dppnl_k
+    derivative_kernels = (
+        ('PBCovlp_cross_derivatives', (0, 1)),
+        ('PBCint1e_r2_origi_derivatives', (2, 1)),
+        ('PBCint1e_r4_origi_derivatives', (4, 1)),
+    )
 
-            i_pp_atom = fakecell._bas[ib, 0]
-            grad[i_pp_atom] += cp.einsum('dpq,qp->d', dppnl_k, dm_dmH[k])
+    bvk_kmesh = k2gamma.kpts_to_kmesh(cell, kpts)
+    bvkmesh_Ls = translation_vectors_for_kmesh(cell, bvk_kmesh, True)
+    expLk = cp.exp(-1j*asarray(bvkmesh_Ls).dot(asarray(kpts).T))
+    dtype = np.float64 if is_gamma_point else np.complex128
 
-    aoslices = cell.aoslice_by_atom()
-    for ia in range(cell.natm):
-        p0, p1 = aoslices[ia][2:]
-        grad[ia] -= cp.einsum('kdpq,kqp->d', dppnl[:, :, p0:p1, :],
-                              dm_dmH[:, :, p0:p1])
+    hl_offset = [0] * 3
+    for (hl_dim, l), i0, i1 in zip(pattern, splits[:-1], splits[1:]):
+        if hl_dim == 0:
+            continue
+        nd = 2 * l + 1
+        n_hl = i1 - i0
+        hl_block = asarray(np.stack(hl_blocks[i0:i1]))
+        ilp = cp.empty((hl_dim, nkpts, n_hl, nd, nao), dtype=dtype)
+        for rn in range(hl_dim):
+            p0 = hl_offset[rn]
+            p1 = p0 + n_hl * nd
+            ilp[rn] = ppnl_half[rn][:,p0:p1].reshape(nkpts, n_hl, nd, nao)
+            hl_offset[rn] = p1
+        tmp = contract('nij,jknlq->iknlq', hl_block, ilp)
+        weights = contract('iknlq,kqp->iknlp', tmp, dm_dmH, out=ilp)
 
-    grad = grad.get()
+        if not is_gamma_point:
+            weights = contract('Lk,iknlp->iLnlp', expLk, weights).real
 
-    grad_max_imag = numpy.max(numpy.abs(grad.imag))
-    if grad_max_imag >= 1e-8:
-        logger.warn(cell, f"Large imaginary part ({grad_max_imag:e}) from pseudopotential non-local term gradient.")
-    grad = grad.real
+        pcell = fakecell.copy(deep=False)
+        pcell._bas = fakecell._bas[i0:i1]
+        opt = int1e.CrossInt1e(pcell, sorted_cell, bvk_kmesh)
+        for rn in range(hl_dim):
+            kern, deriv = derivative_kernels[rn]
+            as_dm = weights[rn].reshape(-1, n_hl*nd, nao)
+            grad_sigma += _derivatives_intor(opt, as_dm, kern, deriv) / nkpts
+    return grad_sigma
 
-    return grad
+def _derivatives_intor(cross_int1e, dm, kern, deriv):
+    '''Contract Re[dm * conjugate(dI)] for a rectangular cross integral.
+    '''
+    cell = cross_int1e.cell
+    assert dm.ndim == 3
+    assert dm.dtype == np.float64
+
+    tmp = cross_int1e.cell2.apply_C_dot(dm, axis=2)
+    dm = cross_int1e.cell1.apply_C_dot(tmp, axis=1)
+    dm = cp.asarray(dm, order='C')
+
+    gout_stride_lookup, shm_size = int1e._gout_stride_lookup_table(cell, deriv)
+    nbatches_shl_pair = len(cross_int1e.shl_pair_offsets) - 1
+
+    if nbatches_shl_pair == 0:
+        return np.zeros([cell.natm+3, 3])
+
+    grad = cp.zeros((cell.natm, 3))
+    sigma = cp.zeros((3, 3))
+    drv = getattr(libpbc, kern)
+    err = drv(
+        ctypes.cast(grad.data.ptr, ctypes.c_void_p),
+        ctypes.cast(sigma.data.ptr, ctypes.c_void_p),
+        ctypes.cast(dm.data.ptr, ctypes.c_void_p),
+        ctypes.byref(cross_int1e.int1e_envs),
+        ctypes.c_int(shm_size),
+        ctypes.c_int(nbatches_shl_pair),
+        ctypes.cast(cross_int1e.shl_pair_offsets.data.ptr, ctypes.c_void_p),
+        ctypes.cast(cross_int1e.bas_ij_idx.data.ptr, ctypes.c_void_p),
+        ctypes.cast(gout_stride_lookup.data.ptr, ctypes.c_void_p),
+        ctypes.c_int(cross_int1e.cell1.nao),
+        ctypes.c_int(cross_int1e.cell2.nao))
+    if err != 0:
+        raise RuntimeError(f'{kern} failed')
+
+    # CrossInt1e concatenates the projector and AO atom lists.
+    natm = cross_int1e.cell1.natm
+    if natm != cross_int1e.cell2.natm:
+        raise ValueError(
+            'fakecell for ppnl must have the same number of atoms as the AO cell')
+    grad = (grad[:natm] + grad[natm:]).get()
+    grad_sigma = np.vstack([grad, sigma.get()])
+    return grad_sigma

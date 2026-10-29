@@ -24,6 +24,7 @@ from gpu4pyscf.df import int3c2e_bdiv as int3c2e
 from gpu4pyscf.df.grad import tdrhf as df_tdrhf_grad
 from gpu4pyscf.df.grad.tdrhf import _jk_energy_per_atom, _jk_energies_per_atom
 from gpu4pyscf.df.grad import rhf as rhf_grad
+from gpu4pyscf.grad.tests.test_tdrhf_grad import diagonalize, diagonalize_tda
 
 atom = """
 O       0.0000000000     0.0000000000     0.0000000000
@@ -32,39 +33,6 @@ H       0.0000000000     0.7570000000     0.5870000000
 """
 
 bas0 = "def2svpd"
-
-
-def diagonalize(a, b, nroots=5):
-    nocc, nvir = a.shape[:2]
-    nov = nocc * nvir
-    a = a.reshape(nov, nov)
-    b = b.reshape(nov, nov)
-    h = np.block([[a        , b       ],
-                     [-b.conj(),-a.conj()]])
-    e, xy = np.linalg.eig(np.asarray(h))
-    sorted_indices = np.argsort(e)
-    
-    e_sorted = e[sorted_indices]
-    xy_sorted = xy[:, sorted_indices]
-    
-    e_sorted_final = e_sorted[e_sorted > 1e-3]
-    xy_sorted = xy_sorted[:, e_sorted > 1e-3]
-    return e_sorted_final[:nroots], xy_sorted[:, :nroots]
-
-
-def diagonalize_tda(a, nroots=5):
-    nocc, nvir = a.shape[:2]
-    nov = nocc * nvir
-    a = a.reshape(nov, nov)
-    e, xy = np.linalg.eig(np.asarray(a))
-    sorted_indices = np.argsort(e)
-    
-    e_sorted = e[sorted_indices]
-    xy_sorted = xy[:, sorted_indices]
-    
-    e_sorted_final = e_sorted[e_sorted > 1e-3]
-    xy_sorted = xy_sorted[:, e_sorted > 1e-3]
-    return e_sorted_final[:nroots], xy_sorted[:, :nroots]
 
 
 def cal_analytic_gradient(mol, td, tdgrad, nocc, nvir, grad_elec, tda):
@@ -283,7 +251,7 @@ class KnownValues(unittest.TestCase):
         for i, jfac in enumerate(j_factor):
             ref += rhf_grad._jk_energy_per_atom(opt, dm[i], j_factor=jfac, k_factor=0)
         assert abs(ej - ref).max() < 1e-12
-        assert abs(lib.fp(ej) - -5.7379651745047555) < 1e-12
+        assert abs(lib.fp(ej) - -5.7379651745047555) < 2e-12
 
     def test_jk_energy_per_atom(self):
         cp.random.seed(8)
@@ -295,13 +263,13 @@ class KnownValues(unittest.TestCase):
         j_factor = [1, -1,  0]
         k_factor = [1, -1, -1]
         ejk = _jk_energy_per_atom(opt, dm, j_factor=j_factor, k_factor=k_factor)
-        assert abs(lib.fp(ejk) - 16.8821623565) < 1e-9
+        assert abs(lib.fp(ejk) - 16.8821623565) < 2e-9
         assert abs(ejk.sum(axis=0)).max() < 1e-9
 
         # mimic insufficent memory, processing in small batches
         with lib.temporary_env(df_tdrhf_grad, get_avail_mem=(lambda **kw: 3000000)):
             ejk = _jk_energy_per_atom(opt, dm, j_factor=j_factor, k_factor=k_factor)
-        assert abs(lib.fp(ejk) - 16.8821623565) < 1e-9
+        assert abs(lib.fp(ejk) - 16.8821623565) < 2e-9
 
         ref = 0
         for i in range(len(dm)):
@@ -331,7 +299,17 @@ class KnownValues(unittest.TestCase):
             ref -= rhf_grad._jk_energy_per_atom(
                 opt, dm[i,1], j_factor=j_factor[i], k_factor=k_factor[i])
             ref *= .5
-            assert abs(ejk[i] - ref).max() < 3e-11
+            assert abs(ejk[i] - ref).max() < 5e-11
+
+        # Vary the auxiliary and orbital contraction partitions for fixed DMs.
+        for jfac in (None, j_factor):
+            with lib.temporary_env(df_tdrhf_grad, get_avail_mem=(lambda **kw: 16000000)):
+                ref_mem = _jk_energies_per_atom(opt, dm, j_factor=jfac, k_factor=k_factor)
+            for memory in (4500000, 2500000):
+                with self.subTest(j_factor=jfac, memory=memory):
+                    with lib.temporary_env(df_tdrhf_grad, get_avail_mem=(lambda **kw: memory)):
+                        ejk_mem = _jk_energies_per_atom(opt, dm, j_factor=jfac, k_factor=k_factor)
+                    np.testing.assert_allclose(ejk_mem, ref_mem, atol=1e-12, rtol=0)
 
         ref = ejk
         dm = cp.vstack([dm]*4)

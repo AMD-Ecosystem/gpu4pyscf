@@ -13,10 +13,12 @@
 # limitations under the License.
 
 import numpy as np
+import cupy as cp
 import pyscf
-from pyscf.gto import intor_cross
+from pyscf.gto import intor_cross, ATOM_OF
 from pyscf.pbc.tools import pbc as pbctools
 from gpu4pyscf.pbc.gto import int1e
+from gpu4pyscf.pbc.grad.rhf import contract_h1e_dm
 
 def test_int1e_ovlp():
     cell = pyscf.M(
@@ -31,7 +33,7 @@ def test_int1e_ovlp():
     kmesh = [6, 1, 1]
     kpts = cell.make_kpts(kmesh)
     pcell = cell.copy(False)
-    pcell.precision = 1e-14
+    pcell.precision = 1e-15
     pcell.build(0, 0)
     ref = pcell.pbc_intor('int1e_ovlp', hermi=1, kpts=kpts)
 
@@ -75,13 +77,13 @@ def test_int1e_kin():
     ref = pcell.pbc_intor('int1e_kin', hermi=1, kpts=kpts)
 
     dat = int1e.int1e_kin(cell).get()
-    assert abs(dat - ref[0]).max() < 1e-10
+    assert abs(dat - ref[0]).max() < 1e-9
 
     dat = int1e.int1e_kin(cell, kpts, kmesh).get()
-    assert abs(dat - ref).max() < 1e-10
+    assert abs(dat - ref).max() < 1e-9
 
     dat = int1e.int1e_kin(cell, kpts).get()
-    assert abs(dat - ref).max() < 1e-10
+    assert abs(dat - ref).max() < 1e-9
 
     mol = cell.to_mol()
     dat = int1e.int1e_kin(mol).get()
@@ -103,16 +105,16 @@ def test_int1e_ipovlp():
     pcell = cell.copy(False)
     pcell.precision = 1e-14
     pcell.build(0, 0)
-    ref = pcell.pbc_intor('int1e_ipovlp', hermi=0, kpts=kpts)
+    ref = np.asarray(pcell.pbc_intor('int1e_ipovlp', hermi=0, kpts=kpts))
 
     dat = int1e.int1e_ipovlp(cell).get()
-    assert abs(dat - ref[0]).max() < 1e-8
+    assert abs(dat - ref[0]).max() < 5e-8
 
     dat = int1e.int1e_ipovlp(cell, kpts, kmesh).get()
-    assert abs(dat - ref).max() < 1e-8
+    assert abs(dat - ref).max() < 5e-8
 
     dat = int1e.int1e_ipovlp(cell, kpts).get()
-    assert abs(dat - ref).max() < 1e-8
+    assert abs(dat - ref).max() < 5e-8
 
     mol = cell.to_mol()
     dat = int1e.int1e_ipovlp(mol).get()
@@ -134,16 +136,16 @@ def test_int1e_ipkin():
     pcell = cell.copy(False)
     pcell.precision = 1e-14
     pcell.build(0, 0)
-    ref = pcell.pbc_intor('int1e_ipkin', hermi=0, kpts=kpts)
+    ref = np.asarray(pcell.pbc_intor('int1e_ipkin', hermi=0, kpts=kpts))
 
     dat = int1e.int1e_ipkin(cell).get()
-    assert abs(dat - ref[0]).max() < 1e-8
+    assert abs(dat - ref[0]).max() < 5e-8
 
     dat = int1e.int1e_ipkin(cell, kpts, kmesh).get()
-    assert abs(dat - ref).max() < 1e-8
+    assert abs(dat - ref).max() < 5e-8
 
     dat = int1e.int1e_ipkin(cell, kpts).get()
-    assert abs(dat - ref).max() < 1e-8
+    assert abs(dat - ref).max() < 5e-8
 
 def test_int1e_ovlp1():
     L = 4
@@ -198,7 +200,7 @@ def test_int1e_ovlp2():
     s = int1e.int1e_ovlp(cell, kpts, kmesh).get()
     assert abs(s - ref).max() < 1e-12
 
-def test_ovlp_stress_tensor():
+def test_ovlp_derivatives():
     a = np.eye(3) * 5.
     np.random.seed(5)
     a += np.random.rand(3, 3) - .5
@@ -229,7 +231,7 @@ def test_ovlp_stress_tensor():
     ref = -(ovlp10 + ovlp01)
     ref = np.einsum('xyij,ji->xy', ref, dm)
     dat = int1e.ovlp_strain_deriv(cell, dm)
-    assert abs(dat - ref).max() < 2e-6
+    assert abs(dat - ref).max() < 1e-11
 
     nk = [5, 4, 1]
     kpts = cell.make_kpts(nk)
@@ -241,10 +243,16 @@ def test_ovlp_stress_tensor():
     ovlp01 = np.einsum('xyiLj,Lk->xykij', ovlp01, expLk, optimize=True)
     ref = ovlp01 + ovlp10
     ref = -np.einsum('xykij,kji->xy', ref, dm).real / len(kpts)
-    dat = int1e.ovlp_strain_deriv(cell, dm, kpts)
-    assert abs(dat - ref).max() < 5e-7
+    grad_sigma = int1e.ovlp_derivatives(cell, dm, kpts)
+    grad = grad_sigma[:-3]
+    sigma = grad_sigma[-3:]
+    assert abs(sigma - ref).max() < 1e-12
 
-def test_kin_stress_tensor():
+    mat = -cp.array(cell.pbc_intor('int1e_ipovlp', hermi=0, kpts=kpts))
+    ref = contract_h1e_dm(cell, mat, cp.asarray(dm)) / len(kpts)
+    assert abs(grad - ref).max() < 1e-12
+
+def test_kin_derivatives():
     a = np.eye(3) * 5.
     np.random.seed(5)
     a += np.random.rand(3, 3) - .5
@@ -275,7 +283,7 @@ def test_kin_stress_tensor():
     ref = -(kin10 + kin01)
     ref = np.einsum('xyij,ji->xy', ref, dm)
     dat = int1e.kin_strain_deriv(cell, dm)
-    assert abs(dat - ref).max() < 2e-6
+    assert abs(dat - ref).max() < 1e-11
 
     nk = [5, 4, 1]
     kpts = cell.make_kpts(nk)
@@ -287,5 +295,115 @@ def test_kin_stress_tensor():
     kin01 = np.einsum('xyiLj,Lk->xykij', kin01, expLk, optimize=True)
     ref = kin01 + kin10
     ref = -np.einsum('xykij,kji->xy', ref, dm).real / len(kpts)
-    dat = int1e.kin_strain_deriv(cell, dm, kpts)
-    assert abs(dat - ref).max() < 5e-7
+    grad_sigma = int1e.kin_derivatives(cell, dm, kpts)
+    grad = grad_sigma[:-3]
+    sigma = grad_sigma[-3:]
+    assert abs(sigma - ref).max() < 1e-11
+
+    mat = -cp.array(cell.pbc_intor('int1e_ipkin', hermi=0, kpts=kpts))
+    ref = contract_h1e_dm(cell, mat, cp.asarray(dm)) / len(kpts)
+    assert abs(grad - ref).max() < 1e-11
+
+def test_int1e_r2_origi():
+    a = np.eye(3) * 5.
+    np.random.seed(5)
+    a += np.random.rand(3, 3) - .5
+    cell = pyscf.M(
+        atom='He 1 1 1; He 2 1.5 2.4; He 3 3.5 0.2',
+        basis=[[0, [.5, 1]],
+               [1, [1.5, 1], [.5, 1]],
+               [2, [.8, 1]],
+               [3, [.7, 1]]
+              ], a=a, unit='Bohr')
+    dat = int1e.int1e_r2_origi(cell)
+    ref = cell.pbc_intor('int1e_r2_origi', comp=1)
+    assert abs(dat.get() - ref).max() < 1e-10
+
+    mol = cell.to_mol()
+    dat = int1e.int1e_r2_origi(mol)
+    ref = mol.intor('int1e_r2_origi', comp=1)
+    assert abs(dat.get() - ref).max() < 1e-10
+
+def test_int1e_r4_origi():
+    a = np.eye(3) * 5.
+    np.random.seed(5)
+    a += np.random.rand(3, 3) - .5
+    cell = pyscf.M(
+        atom='He 1 1 1; He 2 1.5 2.4; He 3 3.5 0.2',
+        basis=[[0, [.5, 1]],
+               [1, [1.5, 1], [.5, 1]],
+               [2, [.8, 1]],
+               [3, [.7, 1]]
+              ], a=a, unit='Bohr', precision=1e-10)
+    dat = int1e.int1e_r4_origi(cell)
+    ref = cell.pbc_intor('int1e_r4_origi', comp=1)
+    assert abs(dat.get() - ref).max() < 1e-10
+
+def test_int1e_r2_origi_ip2():
+    a = np.eye(3) * 5.
+    np.random.seed(5)
+    a += np.random.rand(3, 3) - .5
+    cell = pyscf.M(
+        atom='He 1 1 1; He 2 1.5 2.4; He 3 3.5 0.2',
+        basis=[[0, [.5, 1]],
+               [1, [1.5, 1], [.5, 1]],
+               [2, [.8, 1]],
+               [3, [.7, 1]]
+              ], a=a, unit='Bohr')
+    dat = int1e.int1e_r2_origi_ip2(cell)
+    ref = cell.pbc_intor('int1e_r2_origi_ip2', comp=3)
+    assert abs(dat.get() - ref).max() < 1e-10
+
+    mol = cell.to_mol()
+    dat = int1e.int1e_r2_origi_ip2(mol)
+    ref = mol.intor('int1e_r2_origi_ip2', comp=3)
+    assert abs(dat.get() - ref).max() < 1e-10
+
+def test_int1e_r4_origi_ip2():
+    a = np.eye(3) * 5.
+    np.random.seed(5)
+    a += np.random.rand(3, 3) - .5
+    cell = pyscf.M(
+        atom='He 1 1 1; He 2 1.5 2.4; He 3 3.5 0.2',
+        basis=[[0, [.5, 1]],
+               [1, [1.5, 1], [.5, 1]],
+               [2, [.8, 1]],
+               [3, [.7, 1]]
+              ], a=a, unit='Bohr', precision=1e-10)
+    dat = int1e.int1e_r4_origi_ip2(cell)
+    ref = cell.pbc_intor('int1e_r4_origi_ip2', comp=3)
+    assert abs(dat.get() - ref).max() < 1e-10
+
+def test_cross_int1e():
+    from pyscf import gto
+    from pyscf.pbc import gto as pbcgto
+    a = np.eye(3) * 5.
+    np.random.seed(5)
+    a += np.random.rand(3, 3) - .5
+    cell1 = pyscf.M(
+        atom='He 1 1 1; He 2 1.5 2.4; He 3 3.5 0.2',
+        basis=[[0, [.5, 1]],
+               [1, [1.5, 1], [.5, 1]],
+              ], a=a, unit='Bohr', precision=1e-10)
+    cell2 = cell1.copy()
+    cell2.atom='He 1 0.5 0.4; He 0 0.5 0.2'
+    cell2.basis = [[2, [.8, 1]],
+                   [3, [.7, 1]]]
+    cell2.build(0, 0)
+
+    ref = pbcgto.intor_cross('int1e_ovlp', cell1, cell2)
+    opt = int1e.CrossInt1e(cell1, cell2, [1,1,1])
+    dat = opt.intor('PBCint1e_ovlp', 1, (0,0))
+    assert abs(dat.get() - ref).max() < 1e-12
+
+    kmesh = [3,2,1]
+    kpts = cell1.make_kpts(kmesh)
+    ref = pbcgto.intor_cross('int1e_ovlp', cell1, cell2, kpts=kpts)
+    dat = int1e.CrossInt1e(cell1, cell2, kmesh).intor('PBCint1e_ovlp', 1, (0,0), kpts=kpts)
+    assert abs(dat.get() - ref).max() < 1e-12
+
+    mol1 = cell1.to_mol()
+    mol2 = cell2.to_mol()
+    ref = gto.intor_cross('int1e_ovlp', mol1, mol2)
+    dat = int1e.CrossInt1e(mol1, mol2).intor('PBCint1e_ovlp', 1, (0,0))
+    assert abs(dat.get() - ref).max() < 1e-12

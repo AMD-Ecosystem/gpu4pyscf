@@ -29,9 +29,15 @@ Validates:
 
 import unittest
 import numpy as np
+import cupy as cp
 import pyscf
 from pyscf.pbc.gto.pseudo.pp_int import fake_cell_vnl, _int_vnl
 from pyscf.pbc.lib.kpts_helper import gamma_point
+import gpu4pyscf.pbc.dft.multigrid as multigrid_v1
+from gpu4pyscf.pbc.dft import multigrid_v3
+from gpu4pyscf.pbc.gto.pseudo import pp_int
+from gpu4pyscf.pbc.lib.kpts_helper import fft_matrix
+from gpu4pyscf.pbc.grad.pp import ppnl_derivatives
 import pytest
 
 disp = 1e-4
@@ -125,7 +131,158 @@ def _cpu_vppnl_nuc_grad(cell, dm, kpts=None):
         grad[ia] -= np.einsum('kdpq,kqp->d', dppnl[:, :, p0:p1, :],
                               dm_dmH[:, :, p0:p1])
 
+    return grad.real / nkpts
+
+def vppnl_nuc_grad(cell, dm, kpts=None):
+    '''Nuclear gradients of the non-local part of the GTH pseudo potential,
+    contracted with the density matrix.
+    '''
+    from pyscf.gto import ATOM_OF
+    from pyscf.pbc.lib.kpts_helper import gamma_point
+    from gpu4pyscf.lib.cupy_helper import contract
+    from gpu4pyscf.lib import logger
+    from gpu4pyscf.gto.mole import groupby
+    from gpu4pyscf.pbc.gto.pseudo.pp_int import _int_vnl_gpu, _sorted_fake_cell_vnl
+    if kpts is None:
+        kpts_lst = np.zeros((1, 3))
+    else:
+        kpts_lst = np.reshape(kpts, (-1, 3))
+    nkpts = len(kpts_lst)
+
+    # pattern stores the unique [hl_dim, l] combinations
+    fakecell, hl_blocks, pattern, splits = _sorted_fake_cell_vnl(cell)
+
+    intors_d = ('int1e_ipovlp', 'int1e_r2_origi_ip2', 'int1e_r4_origi_ip2')
+    ppnl_half = _int_vnl_gpu(cell, fakecell, hl_blocks, kpts_lst)
+    ppnl_half_ip2 = _int_vnl_gpu(cell, fakecell, hl_blocks, kpts_lst, intors_d, comp=3)
+    if len(ppnl_half_ip2[0]) > 0:
+        ppnl_half_ip2[0] *= -1
+
+    nao = cell.nao
+    dm = cp.asarray(dm).reshape(-1, nao, nao)
+    if gamma_point(kpts_lst):
+        dm = dm.real
+    dm_dmH = dm + dm.transpose(0, 2, 1).conj()
+
+    grad = np.zeros([cell.natm, 3], dtype=cp.complex128)
+    dppnl = cp.zeros((nao, 3), dtype=cp.complex128)
+
+    hl_offset = [0] * 3
+    for ii, (i0, i1) in enumerate(zip(splits[:-1], splits[1:])):
+        hl_dim, l = pattern[ii]
+        nd = 2 * l + 1
+        hl_block = cp.asarray(np.stack(hl_blocks[i0:i1]))
+        n_hl = len(hl_block)
+
+        ilp = cp.empty((hl_dim, nkpts, n_hl, nd, nao), dtype=cp.complex128)
+        dilp = cp.empty((hl_dim, nkpts, 3, n_hl, nd, nao), dtype=cp.complex128)
+        for i in range(hl_dim):
+            p0 = hl_offset[i]
+            p1 = p0 + n_hl * nd
+            ilp[i] = ppnl_half[i][:,p0:p1].reshape(nkpts, n_hl, nd, nao)
+            dilp[i] = ppnl_half_ip2[i][:,:,p0:p1].reshape(nkpts, 3, n_hl, nd, nao).conj()
+            hl_offset[i] = p1
+
+        tmp = contract('nij,jknlq->iknlq', hl_block, ilp)
+        ilp = contract('iknlq,kqp->iknlp', tmp, dm_dmH, out=ilp)
+
+        value = contract('ikdnlp,iknlp->nd', dilp, ilp)
+        np.add.at(grad, fakecell._bas[i0:i1, ATOM_OF], value.get())
+
+        dppnl += contract('ikdnlp,iknlp->pd', dilp, ilp)
+
+    ao_loc = cell.ao_loc
+    atm_labels = np.repeat(cell._bas[:,ATOM_OF], ao_loc[1:]-ao_loc[:-1])
+    grad -= groupby(atm_labels, dppnl.get(), 'sum')
+
+    grad_max_imag = np.max(np.abs(grad.imag))
+    if grad_max_imag >= 1e-8:
+        logger.warn(cell, f"Large imaginary part ({grad_max_imag:e}) from pseudopotential non-local term gradient.")
     return grad.real
+
+def _get_pp_nonloc_strain_derivatives(cell, mesh, dm_kpts, kpts=None):
+    from pyscf import lib, gto
+    from pyscf.pbc.gto import pseudo
+    from gpu4pyscf.pbc.grad.rhf import _finite_diff_cells
+    from gpu4pyscf.lib.cupy_helper import asarray
+    from gpu4pyscf.pbc.df import ft_ao
+    from gpu4pyscf.pbc.df.aft import get_SI
+    if kpts is None:
+        assert dm_kpts.ndim == 2
+        dm_kpts = dm_kpts[None,:,:]
+        kpts = np.zeros((1, 3))
+    fakemol = gto.Mole()
+    fakemol._atm = np.zeros((1,gto.ATM_SLOTS), dtype=np.int32)
+    fakemol._bas = np.zeros((1,gto.BAS_SLOTS), dtype=np.int32)
+    ptr = gto.PTR_ENV_START
+    fakemol._env = np.zeros(ptr+10)
+    fakemol._bas[0,gto.NPRIM_OF ] = 1
+    fakemol._bas[0,gto.NCTR_OF  ] = 1
+    fakemol._bas[0,gto.PTR_EXP  ] = ptr+3
+    fakemol._bas[0,gto.PTR_COEFF] = ptr+4
+
+    ngrids = np.prod(mesh)
+    buf = np.empty((48,ngrids), dtype=np.complex128)
+    scaled_kpts = kpts.dot(cell.lattice_vectors().T)
+    nkpts = len(kpts)
+
+    def eval_pp_nonloc(cell):
+        vol = cell.vol
+        b = cell.reciprocal_vectors(norm_to=1)
+        Gv = cell.get_Gv(mesh)
+        SI = get_SI(cell, mesh=mesh)
+        # buf for SPG_lmi upto l=0..3 and nl=3
+        vppnl = 0
+        for k, dm in enumerate(dm_kpts):
+            kpt = scaled_kpts[k].dot(b)
+            Gk = Gv + kpt
+            G_rad = lib.norm(Gk, axis=1)
+            aokG = ft_ao.ft_ao(cell, Gv, kpt=kpt) * (1/vol)**.5
+            for ia in range(cell.natm):
+                symb = cell.atom_symbol(ia)
+                if symb not in cell._pseudo:
+                    continue
+                pp = cell._pseudo[symb]
+                p1 = 0
+                for l, proj in enumerate(pp[5:]):
+                    rl, nl, hl = proj
+                    if nl > 0:
+                        fakemol._bas[0,gto.ANG_OF] = l
+                        fakemol._env[ptr+3] = .5*rl**2
+                        fakemol._env[ptr+4] = rl**(l+1.5)*np.pi**1.25
+                        pYlm_part = fakemol.eval_gto('GTOval', Gk)
+
+                        p0, p1 = p1, p1+nl*(l*2+1)
+                        # pYlm is real, SI[ia] is complex
+                        pYlm = np.ndarray((nl,l*2+1,ngrids), dtype=np.complex128, buffer=buf[p0:p1])
+                        for k in range(nl):
+                            qkl = pseudo.pp._qli(G_rad*rl, l, k)
+                            pYlm[k] = pYlm_part.T * qkl
+                if p1 > 0:
+                    SPG_lmi = asarray(buf[:p1])
+                    SPG_lmi *= SI[ia].conj()
+                    SPG_lm_aoGs = SPG_lmi.dot(aokG)
+                    rho = SPG_lm_aoGs.dot(dm).dot(SPG_lm_aoGs.conj().T).real.get()
+                    p1 = 0
+                    for l, proj in enumerate(pp[5:]):
+                        rl, nl, hl = proj
+                        if nl > 0:
+                            nf = l * 2 + 1
+                            p0, p1 = p1, p1+nl*nf
+                            hl = np.asarray(hl)
+                            rho_sub = rho[p0:p1,p0:p1].reshape(nl, nf, nl, nf)
+                            vppnl += np.einsum('ij,jmim->', hl, rho_sub)
+        return vppnl / (nkpts*vol)
+
+    disp = max(1e-5, (cell.precision*.1)**.5)
+    out = np.empty((3, 3))
+    for i in range(3):
+        for j in range(3):
+            cell1, cell2 = _finite_diff_cells(cell, i, j, disp)
+            e1 = eval_pp_nonloc(cell1)
+            e2 = eval_pp_nonloc(cell2)
+            out[i,j] = (e1 - e2) / (2*disp)
+    return out
 
 
 class TestCrossBasisIntegrals(unittest.TestCase):
@@ -145,7 +302,7 @@ class TestCrossBasisIntegrals(unittest.TestCase):
                 continue
             self.assertEqual(c.shape, g.shape,
                              f"Shape mismatch at level {lvl}: CPU {c.shape} vs GPU {g.shape}")
-            err = np.max(np.abs(g - c))
+            err = np.max(np.abs(g.get() - c))
             self.assertAlmostEqual(err, 0, places,
                                    f"Level {lvl} base integrals: max|err|={err:.2e}")
 
@@ -313,6 +470,172 @@ class TestFiniteDifference(unittest.TestCase):
     @pytest.mark.slow
     def test_iron_fd(self):
         self._fd_check(cell_fe, atom_id=1, cart_id=0, places=4)
+
+    @pytest.mark.slow
+    def test_pseudo_gradient_term_with_zero_nexp(self):
+        from gpu4pyscf.pbc.dft.multigrid_v3 import _pploc_derivatives, _get_Gv_bases
+        cell = pyscf.M(
+            a = np.array([
+                [3.18693029, 0.0, 0.0],
+                [1.593466157846262, 2.759963819342879, 0.0],
+                [1.5934664345206309, 0.9199872811273334, 2.6021185638285855],
+            ]),
+            atom = """
+                Ga 0 -0 0
+                N 0.27 0.25 0.25
+            """,
+            unit = "Angstrom",
+            fractional = True,
+            basis = {"Ga": """
+                Ga DZVP-MOLOPT-PBE-GTH-q13 DZVP-MOLOPT-GGA-GTH-q13
+                1
+                2 0 3 5 2 2 2 1
+                        3.01656447397946    -1.48615548285917E-02    -4.82983759170633E-02     2.02987429358091E-02    -2.13010036960508E-02    -6.10380904630582E-01    -2.58289780414473E-01     5.55521291693774E-04
+                        1.10154483600156     4.01248950871096E-01     3.52468529188874E-01     1.33450451355874E-01    -1.72653030419605E-01    -4.80974524787380E-01    -2.30702268754674E-01     1.31822285722899E-01
+                        0.40429913834530    -2.68052946527183E-01    -4.34387846771425E-01    -3.62845354157947E-01     5.18953771543878E-01    -3.63556802820521E-01     6.94523681159656E-01     8.93294520205134E-01
+                        0.15745703748705    -8.26716943904166E-01     2.37442900862471E-02    -7.36191953337155E-01     3.01123009465079E-01    -1.38575446856837E-01     5.57839790724372E-01     4.07171709684337E-01
+                        0.05692267130844    -2.88855442630589E-01     8.27121240422123E-01    -5.55101142265710E-01    -7.80864171135513E-01    -4.97947071392160E-02     2.53060753645856E-01     1.37326888851730E-01
+            """, # Largest exponent removed
+            "N": """
+                N DZVP-MOLOPT-PBE-GTH-q5 DZVP-MOLOPT-GGA-GTH-q5
+                1
+                2 0 2 4 2 2 1
+                        2.81966237794259    -1.74044102679302E-01     4.24004069220353E-02    -2.98226721897575E-01     1.34580220978959E-01     1.14821628218594E-01
+                        1.09114390677598     4.41288051809814E-01    -9.13540901978963E-02    -5.60270180894578E-01     2.83662239065009E-01     4.43570475758278E-01
+                        0.43100900982055     8.58813021027908E-01    -6.51904223705357E-02    -6.89335539768301E-01     1.57118280926414E-01     8.82189870978279E-01
+                        0.13893847703177     1.11941135993420E-01     9.91688841490055E-01    -3.33973496542287E-01    -9.35099219564131E-01     8.84793677023504E-02
+            """}, # Largest exponent removed
+            pseudo = {"Ga": """
+                Ga GTH-PBE-q13 GTH-GGA-q13
+                    2    1   10    0
+                    0.49000018487159       0
+                    3
+                    0.41677483095310       3   10.48679119269639   -4.92176814704009    0.87070493953275
+                                                                    7.77018207637078   -2.24815160599927
+                                                                                        1.78441528219626
+                    0.56962661099353       2    1.77860037827899    0.19586036552562
+                                                                -0.23168154587648
+                    0.23814730101676       1  -16.24818353736915
+                """, "N": """
+                    N  GTH-PBE-q5 GTH-GGA-q5
+                        2    3    0    0
+                        0.28382600053810       2  -12.41517350030142    1.86813618209744
+                        1
+                        0.25541754972811       1   13.63124869974610
+                """}, # Unmodified from pyscf/pbc/gto/pseudo/POTENTIAL_UZH, made a copy because it requires a relatively new version of pyscf
+            precision = 1e-6,
+            verbose = 0,
+        )
+
+        kmesh = [1,3,3]
+        kpts = cell.make_kpts(kmesh)
+        mf = cell.KRKS(xc = "pbe", kpts = kpts)
+        mf.conv_tol = 1e-1
+        mf = mf.to_gpu()
+
+        mf = mf.multigrid_numint()
+        mf.kernel()
+
+        ni = mf._numint
+        dm0 = mf.make_rdm1()
+
+        ni = multigrid_v3.MultiGridNumInt(cell)
+        ni.allow_mesh_reduction = False
+        Gv_bases = _get_Gv_bases(ni.mesh, cell.reciprocal_vectors())
+        rho_g = multigrid_v3._eval_rhoG(ni, dm0, 1, kpts).ravel()
+        analytical_gradient = _pploc_derivatives(cell, rho_g, Gv_bases)[:-3].get()
+
+        dx = 1e-4
+        numerical_gradient = np.zeros([cell.natm, 3])
+
+        def get_pp_local_energy(cell):
+            vpplocG = multigrid_v1.eval_vpplocG(cell, ni.mesh)
+            e_vpplocG = cp.einsum("g,g->", rho_g.conj(), vpplocG) / cell.vol
+            assert abs(e_vpplocG.imag) < 1e-8
+            return float(e_vpplocG.real)
+
+        cell_copy = cell.copy()
+        cell_copy.fractional = False
+        for i_atom in range(cell.natm):
+            for i_xyz in range(3):
+                xyz_p = cell.atom_coords(unit='Bohr')
+                xyz_p[i_atom, i_xyz] += dx
+                cell_copy.set_geom_(xyz_p, unit='Bohr')
+                cell_copy.build()
+                e_p = get_pp_local_energy(cell_copy)
+
+                xyz_m = cell.atom_coords(unit='Bohr')
+                xyz_m[i_atom, i_xyz] -= dx
+                cell_copy.set_geom_(xyz_m, unit='Bohr')
+                cell_copy.build()
+                e_m = get_pp_local_energy(cell_copy)
+
+                numerical_gradient[i_atom, i_xyz] = (e_p - e_m) / (2 * dx)
+
+        assert np.max(np.abs(numerical_gradient - analytical_gradient)) < 1e-8
+
+    def test_ppnl_derivatives(self):
+        from gpu4pyscf.pbc.grad.rhf import _finite_diff_cells
+        cell = pyscf.M(
+            a = np.array([
+                [3.18693029, 0.0, 0.0],
+                [1.593466157846262, 2.759963819342879, 0.0],
+                [1.5934664345206309, 0.9199872811273334, 2.6021185638285855],
+            ]),
+            atom = """
+                Ga 0 -0 0
+                Ga 0.25 0.75 0.25
+                N 0.27 0.25 0.25
+                N 0.75 0.25 0.75
+            """,
+            unit = "Angstrom",
+            fractional = True,
+            basis=[[0, [1.2, .7, .2], [.5, .3, .8]],
+                   [1, [.8, 1]], [2, [.7, 1]]],
+            pseudo = {
+                "Ga": """
+                Ga GTH-PBE-q13 GTH-GGA-q13
+                    2    1   10    0
+                    0.49000018487159       0
+                    3
+                    0.41677483095310       3   10.48679119269639   -4.92176814704009    0.87070493953275
+                                                                    7.77018207637078   -2.24815160599927
+                                                                                        1.78441528219626
+                    0.56962661099353       2    1.77860037827899    0.19586036552562
+                                                                   -0.23168154587648
+                    0.23814730101676       1  -16.24818353736915
+                """,
+                "N": """
+                    N  GTH-PBE-q5 GTH-GGA-q5
+                        2    3    0    0
+                        0.28382600053810       2  -12.41517350030142    1.86813618209744
+                        1
+                        0.25541754972811       1   13.63124869974610
+                """},
+        )
+        nao = cell.nao
+        kmesh = [3,2,1]
+        kpts = cell.make_kpts(kmesh)
+        nkpts = len(kpts)
+        cp.random.seed(11)
+        dm = cp.random.rand(nkpts, nao, nao) * .2
+        expLk = fft_matrix(kmesh)
+        dm = cp.einsum('Lk,Lpq->kpq', expLk.conj(), dm)
+        dm = dm + dm.conj().transpose(0,2,1)
+        ref = vppnl_nuc_grad(cell, dm, kpts) / nkpts
+        dat = ppnl_derivatives(cell, dm, kpts)
+        assert abs(ref - dat[:-3]).max() < 1e-10
+
+        sigma = dat[-3:]
+
+        disp = 1e-4
+        for (i, j) in [(0, 0), (0, 1), (0, 2), (2, 0), (2, 2)]:
+            cell1, cell2 = _finite_diff_cells(cell, i, j, disp=disp)
+            v = pp_int.get_pp_nl_gpu(cell1, cell1.make_kpts(kmesh))
+            e1 = cp.einsum('kpq,kqp->', dm, v).real / nkpts
+            v = pp_int.get_pp_nl_gpu(cell2, cell2.make_kpts(kmesh))
+            e2 = cp.einsum('kpq,kqp->', dm, v).real / nkpts
+            assert abs(sigma[i, j] - (e1-e2)/2/disp) < 2e-7
 
 
 if __name__ == '__main__':

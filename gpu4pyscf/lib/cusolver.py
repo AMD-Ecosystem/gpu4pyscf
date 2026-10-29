@@ -16,10 +16,13 @@
 import numpy as np
 import cupy
 import ctypes
-from ctypes.util import find_library
 from cupy_backends.cuda.libs import cusolver
 from cupy_backends.cuda.libs import cublas
 from cupy.cuda import device
+
+from gpu4pyscf.lib.utils import load_library
+
+from ctypes.util import find_library
 
 # ROCm/HIP build: cuSOLVER's dense generalized eigensolver maps to hipSOLVER.
 # The hipsolverDn{D,Z}sygvd/hegvd entry points are ABI-identical to the
@@ -55,7 +58,10 @@ if _IS_ROCM:
         raise RuntimeError('hipsolverCreate failed')
 else:
     libcusolver = find_library('cusolver')
-    libcusolver = ctypes.CDLL(libcusolver)
+    if libcusolver is not None:
+        libcusolver = ctypes.CDLL(libcusolver)
+    else:
+        libcusolver = load_library('libcusolver', path='nvidia/cusolver/lib')
     CUSOLVER_EIG_TYPE_1 = 1
     CUSOLVER_EIG_TYPE_2 = 2
     CUSOLVER_EIG_TYPE_3 = 3

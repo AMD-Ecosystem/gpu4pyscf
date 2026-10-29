@@ -243,7 +243,7 @@ def _get_vxc_diag(hessobj, mo_coeff, mo_occ, max_memory):
             mo_coeff_mask = mo_coeff[:,mask,:]
             rhoa = numint.eval_rho2(_sorted_mol, ao[0], mo_coeff_mask[0], mo_occ[0], mask, xctype)
             rhob = numint.eval_rho2(_sorted_mol, ao[0], mo_coeff_mask[1], mo_occ[1], mask, xctype)
-            vxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 1, xctype=xctype)[1]
+            vxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 1, xctype=xctype, spin=1)[1]
             wv = weight * vxc[:,0]
             aowa = numint._scale_ao(ao[0], wv[0])
             aowb = numint._scale_ao(ao[0], wv[1])
@@ -267,7 +267,7 @@ def _get_vxc_diag(hessobj, mo_coeff, mo_occ, max_memory):
             mo_coeff_mask = mo_coeff[:,mask,:]
             rhoa = numint.eval_rho2(_sorted_mol, ao[:4], mo_coeff_mask[0], mo_occ[0], mask, xctype)
             rhob = numint.eval_rho2(_sorted_mol, ao[:4], mo_coeff_mask[1], mo_occ[1], mask, xctype)
-            vxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 1, xctype=xctype)[1]
+            vxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 1, xctype=xctype, spin=1)[1]
             wv = weight * vxc
             #:aow = numpy.einsum('npi,np->pi', ao[:4], wv[:4])
             aowa = numint._scale_ao(ao[:4], wv[0,:4])
@@ -306,7 +306,7 @@ def _get_vxc_diag(hessobj, mo_coeff, mo_occ, max_memory):
             mo_coeff_mask = mo_coeff[:,mask,:]
             rhoa = numint.eval_rho2(_sorted_mol, ao[:10], mo_coeff_mask[0], mo_occ[0], mask, xctype)
             rhob = numint.eval_rho2(_sorted_mol, ao[:10], mo_coeff_mask[1], mo_occ[1], mask, xctype)
-            vxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 1, xctype=xctype)[1]
+            vxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 1, xctype=xctype, spin=1)[1]
             wv = weight * vxc
             wv[:,4] *= .5  # for the factor 1/2 in tau
             #:aow = numpy.einsum('npi,np->pi', ao[:4], wv[:4])
@@ -463,7 +463,7 @@ def _get_vxc_deriv2(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho2(_sorted_mol, ao[0], mo_coeff[0], mo_occ[0], mask, xctype)
             rhob = numint.eval_rho2(_sorted_mol, ao[0], mo_coeff[1], mo_occ[1], mask, xctype)
             t1 = log.timer_debug2('eval rho', *t1)
-            vxc, fxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 2, xctype=xctype)[1:3]
+            vxc, fxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 2, xctype=xctype, spin=1)[1:3]
             t1 = log.timer_debug2('eval vxc', *t1)
             wv = weight * vxc[:,0]
             aowa = [numint._scale_ao(ao[i], wv[0]) for i in range(1, 4)]
@@ -512,7 +512,7 @@ def _get_vxc_deriv2(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho2(_sorted_mol, ao[:4], mo_coeff[0], mo_occ[0], mask, xctype)
             rhob = numint.eval_rho2(_sorted_mol, ao[:4], mo_coeff[1], mo_occ[1], mask, xctype)
             t1 = log.timer_debug2('eval rho', *t1)
-            vxc, fxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 2, xctype=xctype)[1:3]
+            vxc, fxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 2, xctype=xctype, spin=1)[1:3]
             t1 = log.timer_debug2('eval vxc', *t1)
             wv = weight * vxc
             wv[:,0] *= .5
@@ -529,11 +529,12 @@ def _get_vxc_deriv2(hessobj, mo_coeff, mo_occ, max_memory):
             ao_dmb_mask = contract('nig,ij->njg', ao_mask[:4], dm0b_mask)
             vmata_dm_tmp = cupy.empty([3,3,nao_non0])
             vmatb_dm_tmp = cupy.empty([3,3,nao_non0])
+            wv = cupy.empty((2, 3, 4, weight.size))
             for ia in range(_sorted_mol.natm):
                 dR_rho1a = _make_dR_rho1(ao, ao_dm0a, ia, aoslices, xctype)
                 dR_rho1b = _make_dR_rho1(ao, ao_dm0b, ia, aoslices, xctype)
-                wv = contract('xbyg,sxg->bsyg', wf[0], dR_rho1a)
-                wv+= contract('xbyg,sxg->bsyg', wf[1], dR_rho1b)
+                contract('xbyg,sxg->bsyg', wf[0], dR_rho1a, out=wv)
+                contract('xbyg,sxg->bsyg', wf[1], dR_rho1b, beta=1, out=wv)
                 wv[:,:,0] *= .5
                 wva, wvb = wv
                 for i in range(3):
@@ -574,7 +575,7 @@ def _get_vxc_deriv2(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho2(_sorted_mol, ao[:10], mo_coeff[0], mo_occ[0], mask, xctype)
             rhob = numint.eval_rho2(_sorted_mol, ao[:10], mo_coeff[1], mo_occ[1], mask, xctype)
             t1 = log.timer_debug2('eval rho', *t1)
-            vxc, fxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa, rhob)), 2, xctype=xctype)[1:3]
+            vxc, fxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa, rhob)), 2, xctype=xctype, spin=1)[1:3]
             t1 = log.timer_debug2('eval vxc', *t1)
             wv = weight * vxc
             wv[:,0] *= .5
@@ -600,11 +601,12 @@ def _get_vxc_deriv2(hessobj, mo_coeff, mo_occ, max_memory):
             ao_dma_mask = contract('nig,ij->njg', ao_mask[:4], dm0a_mask)
             ao_dmb_mask = contract('nig,ij->njg', ao_mask[:4], dm0b_mask)
             wf = weight * fxc
+            wv = cupy.empty((2, 3, 5, weight.size))
             for ia in range(_sorted_mol.natm):
                 dR_rho1a = _make_dR_rho1(ao, ao_dm0a, ia, aoslices, xctype)
                 dR_rho1b = _make_dR_rho1(ao, ao_dm0b, ia, aoslices, xctype)
-                wv = contract('xbyg,sxg->bsyg', wf[0], dR_rho1a)
-                wv+= contract('xbyg,sxg->bsyg', wf[1], dR_rho1b)
+                contract('xbyg,sxg->bsyg', wf[0], dR_rho1a, out=wv)
+                contract('xbyg,sxg->bsyg', wf[1], dR_rho1b, beta=1, out=wv)
                 wv[:,:,0] *= .5
                 wv[:,:,4] *= .5  # for the factor 1/2 in tau
                 wva, wvb = wv
@@ -920,6 +922,7 @@ def _get_exc_deriv2_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
     mol = hessobj.mol
     mf = hessobj.base
     ni = numint.NumInt()
+    ni.omega = mf._numint.omega
     xctype = ni._xc_type(mf.xc)
 
     if hessobj.grids is not None:
@@ -957,7 +960,7 @@ def _get_exc_deriv2_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
 
     if xctype == 'LDA':
         g0 = 0
-        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 0, strict_grid_order = True):
+        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 0):
             g1 = g0 + weight.shape[0]
 
             if ao.size == 0:
@@ -968,10 +971,10 @@ def _get_exc_deriv2_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho(_sorted_mol, ao, dm0_masked[0], xctype = xctype, hermi = 1)
             rhob = numint.eval_rho(_sorted_mol, ao, dm0_masked[1], xctype = xctype, hermi = 1)
             rho = cupy.asarray((rhoa, rhob))
-            exc = ni.eval_xc_eff(mf.xc, rho, deriv = 0, xctype=xctype)[0]
+            exc = ni.eval_xc_eff(mf.xc, rho, deriv = 0, xctype=xctype, spin=1)[0]
             del rho
 
-            epsilon = exc[:, 0] * (rhoa + rhob)
+            epsilon = exc * (rhoa + rhob)
             del rhoa, rhob, exc
 
             d2w_dAdB = get_d2weight_dAdB(_sorted_mol, grids, (g0,g1))
@@ -981,7 +984,7 @@ def _get_exc_deriv2_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
         assert g1 == ngrids
 
         g0 = 0
-        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 2, strict_grid_order = True):
+        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 2):
             g1 = g0 + weight.shape[0]
 
             ao = ao[:, :, nonzero_weight_mask[g0:g1]]
@@ -999,7 +1002,7 @@ def _get_exc_deriv2_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho(_sorted_mol, ao[0], dm0_masked[0], xctype = xctype, hermi = 1)
             rhob = numint.eval_rho(_sorted_mol, ao[0], dm0_masked[1], xctype = xctype, hermi = 1)
             rho = cupy.asarray((rhoa, rhob))
-            vxc, fxc = ni.eval_xc_eff(mf.xc, rho, deriv = 2, xctype = xctype)[1:3]
+            vxc, fxc = ni.eval_xc_eff(mf.xc, rho, deriv = 2, xctype = xctype, spin=1)[1:3]
             del rhoa, rhob, rho
 
             depsilon_drho = vxc[:,0,:] # Just of shape (2,ngrids)
@@ -1042,7 +1045,7 @@ def _get_exc_deriv2_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
 
     elif xctype == 'GGA':
         g0 = 0
-        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 1, strict_grid_order = True):
+        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 1):
             g1 = g0 + weight.shape[0]
 
             if ao.size == 0:
@@ -1053,10 +1056,10 @@ def _get_exc_deriv2_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho(_sorted_mol, ao, dm0_masked[0], xctype = xctype, hermi = 1)
             rhob = numint.eval_rho(_sorted_mol, ao, dm0_masked[1], xctype = xctype, hermi = 1)
             rho = cupy.asarray((rhoa, rhob))
-            exc = ni.eval_xc_eff(mf.xc, rho, deriv = 0, xctype=xctype)[0]
+            exc = ni.eval_xc_eff(mf.xc, rho, deriv = 0, xctype=xctype, spin=1)[0]
             del rho
 
-            epsilon = exc[:, 0] * (rhoa[0, :] + rhob[0, :])
+            epsilon = exc * (rhoa[0, :] + rhob[0, :])
             del rhoa, rhob, exc
 
             d2w_dAdB = get_d2weight_dAdB(_sorted_mol, grids, (g0,g1))
@@ -1066,7 +1069,7 @@ def _get_exc_deriv2_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
         assert g1 == ngrids
 
         g0 = 0
-        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 3, strict_grid_order = True):
+        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 3):
             g1 = g0 + weight.shape[0]
 
             ao = ao[:, :, nonzero_weight_mask[g0:g1]]
@@ -1085,7 +1088,7 @@ def _get_exc_deriv2_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho(_sorted_mol, ao[:4], dm0_masked[0], xctype = xctype, hermi = 1)
             rhob = numint.eval_rho(_sorted_mol, ao[:4], dm0_masked[1], xctype = xctype, hermi = 1)
             rho = cupy.asarray((rhoa, rhob))
-            vxc, fxc = ni.eval_xc_eff(mf.xc, rho, deriv = 2, xctype = xctype)[1:3]
+            vxc, fxc = ni.eval_xc_eff(mf.xc, rho, deriv = 2, xctype = xctype, spin=1)[1:3]
             del rhoa, rhob, rho
 
             depsilon_drho = vxc[:, 0, :]
@@ -1133,7 +1136,7 @@ def _get_exc_deriv2_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
 
     elif xctype == 'MGGA':
         g0 = 0
-        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 1, strict_grid_order = True):
+        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 1):
             g1 = g0 + weight.shape[0]
 
             if ao.size == 0:
@@ -1144,10 +1147,10 @@ def _get_exc_deriv2_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho(_sorted_mol, ao[:4], dm0_masked[0], xctype = xctype, hermi = 1)
             rhob = numint.eval_rho(_sorted_mol, ao[:4], dm0_masked[1], xctype = xctype, hermi = 1)
             rho = cupy.asarray((rhoa, rhob))
-            exc = ni.eval_xc_eff(mf.xc, rho, deriv = 0, xctype=xctype)[0]
+            exc = ni.eval_xc_eff(mf.xc, rho, deriv = 0, xctype=xctype, spin=1)[0]
             del rho
 
-            epsilon = exc[:, 0] * (rhoa[0, :] + rhob[0, :])
+            epsilon = exc * (rhoa[0, :] + rhob[0, :])
             del rhoa, rhob, exc
 
             d2w_dAdB = get_d2weight_dAdB(_sorted_mol, grids, (g0,g1))
@@ -1157,7 +1160,7 @@ def _get_exc_deriv2_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
         assert g1 == ngrids
 
         g0 = 0
-        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 3, strict_grid_order = True):
+        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 3):
             g1 = g0 + weight.shape[0]
 
             ao = ao[:, :, nonzero_weight_mask[g0:g1]]
@@ -1176,7 +1179,7 @@ def _get_exc_deriv2_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho(_sorted_mol, ao[:4], dm0_masked[0], xctype = xctype, hermi = 1)
             rhob = numint.eval_rho(_sorted_mol, ao[:4], dm0_masked[1], xctype = xctype, hermi = 1)
             rho = cupy.asarray((rhoa, rhob))
-            vxc, fxc = ni.eval_xc_eff(mf.xc, rho, deriv = 2, xctype = xctype)[1:3]
+            vxc, fxc = ni.eval_xc_eff(mf.xc, rho, deriv = 2, xctype = xctype, spin=1)[1:3]
             del rhoa, rhob, rho
 
             depsilon_drho = vxc[:, 0, :]
@@ -1287,7 +1290,7 @@ def _get_vxc_deriv1(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho2(_sorted_mol, ao[0], mo_coeff[0], mo_occ[0], mask, xctype)
             rhob = numint.eval_rho2(_sorted_mol, ao[0], mo_coeff[1], mo_occ[1], mask, xctype)
             t1 = log.timer_debug2('eval rho', *t1)
-            vxc, fxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 2, xctype=xctype)[1:3]
+            vxc, fxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 2, xctype=xctype, spin=1)[1:3]
             t1 = log.timer_debug2('eval vxc', *t1)
             wv = weight * vxc[:,0]
             aow = numint._scale_ao(ao[0], wv[0])
@@ -1326,7 +1329,7 @@ def _get_vxc_deriv1(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho2(_sorted_mol, ao[:4], mo_coeff[0], mo_occ[0], mask, xctype)
             rhob = numint.eval_rho2(_sorted_mol, ao[:4], mo_coeff[1], mo_occ[1], mask, xctype)
             t1 = log.timer_debug2('eval rho', *t1)
-            vxc, fxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 2, xctype=xctype)[1:3]
+            vxc, fxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 2, xctype=xctype, spin=1)[1:3]
             t1 = log.timer_debug2('eval vxc', *t1)
             wv = weight * vxc
             wv[:,0] *= .5
@@ -1368,7 +1371,7 @@ def _get_vxc_deriv1(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho2(_sorted_mol, ao[:10], mo_coeff[0], mo_occ[0], mask, xctype)
             rhob = numint.eval_rho2(_sorted_mol, ao[:10], mo_coeff[1], mo_occ[1], mask, xctype)
             t1 = log.timer_debug2('eval rho', *t1)
-            vxc, fxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 2, xctype=xctype)[1:3]
+            vxc, fxc = ni.eval_xc_eff(mf.xc, cupy.asarray((rhoa,rhob)), 2, xctype=xctype, spin=1)[1:3]
             t1 = log.timer_debug2('eval vxc', *t0)
             wv = weight * vxc
             wv[:,0] *= .5
@@ -1437,6 +1440,7 @@ def _get_vxc_deriv1_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
     mol = hessobj.mol
     mf = hessobj.base
     ni = numint.NumInt()
+    ni.omega = mf._numint.omega
     xctype = ni._xc_type(mf.xc)
 
     if hessobj.grids is not None:
@@ -1488,7 +1492,7 @@ def _get_vxc_deriv1_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
 
     if xctype == 'LDA':
         g0 = 0
-        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 1, strict_grid_order = True):
+        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 1):
             g1 = g0 + weight.shape[0]
 
             ao = ao[:, :, nonzero_weight_mask[g0:g1]]
@@ -1507,7 +1511,7 @@ def _get_vxc_deriv1_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho(_sorted_mol, ao[0], dm0_masked[0], xctype = xctype, hermi = 1)
             rhob = numint.eval_rho(_sorted_mol, ao[0], dm0_masked[1], xctype = xctype, hermi = 1)
             rho = cupy.asarray((rhoa, rhob))
-            vxc, fxc = ni.eval_xc_eff(mf.xc, rho, deriv = 2, xctype=xctype)[1:3]
+            vxc, fxc = ni.eval_xc_eff(mf.xc, rho, deriv = 2, xctype=xctype, spin=1)[1:3]
             del rhoa, rhob, rho
 
             depsilon_drho = vxc[:, 0, :] # Just of shape (2, ngrids)
@@ -1555,7 +1559,7 @@ def _get_vxc_deriv1_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
             mu_vw = contract("pg,ug->upg", mu, depsilon_drho * weight)
             dmudA_nu_ao = contract("dpg,uqg->udpq", dmu_dr, mu_vw)
             del mu_vw
-            dFock_orbital_response_dmudA_nu_term[numpy.ix_(range(2), range(3), idx, idx)] += dmudA_nu_ao
+            add_sparse(dFock_orbital_response_dmudA_nu_term, dmudA_nu_ao, idx)
 
             # dFock_mo_occ[i_atom_of_grids, :, :, :] += cupy.einsum("pi,g,dpg,qg,qj->dij", mo_coeff_masked, depsilon_drho * weight, dmu_dr, mu, mocc_masked)
             # dFock_mo_occ[i_atom_of_grids, :, :, :] += cupy.einsum("pi,g,dqg,pg,qj->dij", mo_coeff_masked, depsilon_drho * weight, dmu_dr, mu, mocc_masked)
@@ -1574,7 +1578,7 @@ def _get_vxc_deriv1_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
 
     elif xctype == 'GGA':
         g0 = 0
-        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 2, strict_grid_order = True):
+        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 2):
             g1 = g0 + weight.shape[0]
 
             ao = ao[:, :, nonzero_weight_mask[g0:g1]]
@@ -1594,7 +1598,7 @@ def _get_vxc_deriv1_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho(_sorted_mol, ao[:4], dm0_masked[0], xctype = xctype, hermi = 1)
             rhob = numint.eval_rho(_sorted_mol, ao[:4], dm0_masked[1], xctype = xctype, hermi = 1)
             rho = cupy.asarray((rhoa, rhob))
-            vxc, fxc = ni.eval_xc_eff(mf.xc, rho, deriv = 2, xctype=xctype)[1:3]
+            vxc, fxc = ni.eval_xc_eff(mf.xc, rho, deriv = 2, xctype=xctype, spin=1)[1:3]
             del rhoa, rhob, rho
 
             dw_dA = get_dweight_dA(_sorted_mol, grids, (g0,g1))
@@ -1667,7 +1671,7 @@ def _get_vxc_deriv1_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
             dmudA_nu_ao += contract("udpg,qg->udpq", d2mudr2_weight_depsilondnablarho, mu)
             del d2mudr2_weight_depsilondnablarho
 
-            dFock_orbital_response_dmudA_nu_term[numpy.ix_(range(2), range(3), idx, idx)] += dmudA_nu_ao
+            add_sparse(dFock_orbital_response_dmudA_nu_term, dmudA_nu_ao, idx)
 
             # dFock_mo_occ[i_atom_of_grids, :, :, :] += cupy.einsum(
             #     "pi,g,dpg,qg,qj->dij", mo_coeff_masked, depsilon_drho * weight, dmu_dr, mu, mocc_masked)
@@ -1696,7 +1700,7 @@ def _get_vxc_deriv1_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
 
     elif xctype == 'MGGA':
         g0 = 0
-        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 2, strict_grid_order = True):
+        for ao, idx, weight, _ in ni.block_loop(_sorted_mol, grids, nao, deriv = 2):
             g1 = g0 + weight.shape[0]
 
             ao = ao[:, :, nonzero_weight_mask[g0:g1]]
@@ -1716,7 +1720,7 @@ def _get_vxc_deriv1_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
             rhoa = numint.eval_rho(_sorted_mol, ao[:4], dm0_masked[0], xctype = xctype, hermi = 1)
             rhob = numint.eval_rho(_sorted_mol, ao[:4], dm0_masked[1], xctype = xctype, hermi = 1)
             rho = cupy.asarray((rhoa, rhob))
-            vxc, fxc = ni.eval_xc_eff(mf.xc, rho, deriv = 2, xctype=xctype)[1:3]
+            vxc, fxc = ni.eval_xc_eff(mf.xc, rho, deriv = 2, xctype=xctype, spin=1)[1:3]
             del rhoa, rhob, rho
 
             dw_dA = get_dweight_dA(_sorted_mol, grids, (g0,g1))
@@ -1803,7 +1807,7 @@ def _get_vxc_deriv1_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
             dmudA_nu_ao += contract("dxpg,uxqg->udpq", d2mu_dr2, dmudr_weight_depsilondtau + mu_weight_depsilondnablarho)
             del mu_weight_depsilondnablarho, dmudr_weight_depsilondtau
 
-            dFock_orbital_response_dmudA_nu_term[numpy.ix_(range(2), range(3), idx, idx)] += dmudA_nu_ao
+            add_sparse(dFock_orbital_response_dmudA_nu_term, dmudA_nu_ao, idx)
 
             # dFock_mo_occ[i_atom_of_grids, :, :, :] += cupy.einsum(
             #     "pi,g,dpg,qg,qj->dij", mo_coeff_masked, depsilon_drho * weight, dmu_dr, mu, mocc_masked)
@@ -1902,17 +1906,25 @@ def get_veff_resp_mo(hessobj, mol, dms, mo_coeff, mo_occ, hermi=1):
         v1vo[:,nmoa*nocca:] += vnlcb.reshape(-1, nmob*noccb)
 
     if hybrid:
-        vj, vk = hessobj.get_jk_mo(mol, dms, mo_coeff, mo_occ, hermi=1)
-        vk *= hyb
-        if omega > 1e-10:
-            _, vk_lr = hessobj.get_jk_mo(mol, dms, mo_coeff, mo_occ,
-                                         hermi, with_j=False, omega=omega)
-            vk_lr *= (alpha-hyb)
-            vk += vk_lr
+        range_separated_mode = getattr(mf, 'range_separated_mode', 'mix_outside_kernel') # Direct SCF defaults to mix_outside_kernel
+        if omega != 0:  # For range separated Coulomb
+            if range_separated_mode == 'mix_outside_kernel':
+                vj, vk = hessobj.get_jk_mo(mol, dms, mo_coeff, mo_occ, hermi=1)
+                vk *= hyb
+                _, vk_lr = hessobj.get_jk_mo(mol, dms, mo_coeff, mo_occ, hermi, with_j=False, omega=omega)
+                vk_lr *= (alpha-hyb)
+                vk += vk_lr
+            elif range_separated_mode == 'mix_inside_kernel':
+                vj, _ = hessobj.get_jk_mo(mol, dms, mo_coeff, mo_occ, hermi=1, with_k=False)
+                _, vk = hessobj.get_jk_mo(mol, dms, mo_coeff, mo_occ, hermi=1, with_j=False, omega=omega, lr_factor=alpha, sr_factor=hyb)
+            else:
+                raise ValueError(f'range_separated_mode = {range_separated_mode} is not supported')
+        else:
+            vj, vk = hessobj.get_jk_mo(mol, dms, mo_coeff, mo_occ, hermi=1)
+            vk *= hyb
         v1vo += vj - vk
     else:
-        v1vo += hessobj.get_jk_mo(mol, dms, mo_coeff, mo_occ,
-                                  hermi=1, with_k=False)[0]
+        v1vo += hessobj.get_jk_mo(mol, dms, mo_coeff, mo_occ, hermi=1, with_k=False)[0]
     return v1vo
 
 def nr_uks_fnlc_mo(mf, mol, mo_coeff, mo_occ, dm1s, return_in_mo=True):

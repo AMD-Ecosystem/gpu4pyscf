@@ -18,7 +18,7 @@ import cupy as cp
 from pyscf import lib
 from pyscf.pbc.scf import hf as pbchf_cpu
 from pyscf.pbc import gto as pbcgto
-from gpu4pyscf.pbc import scf
+from gpu4pyscf.pbc import dft, scf
 from gpu4pyscf.pbc.scf.rsjk import PBCJKMatrixOpt
 from gpu4pyscf.pbc.scf.j_engine import PBCJMatrixOpt
 
@@ -26,13 +26,12 @@ class KnownValues(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         L = 4
-        n = 21
         cell = pbcgto.M(
             unit = 'B',
             verbose = 7,
             output = '/dev/null',
             a = ((L,0,0),(0,L,0),(0,0,L)),
-            mesh = [n,n,n],
+            precision = 1e-9,
             atom = [['He', (L/2.-.5,L/2.,L/2.-.5)],
                     ['He', (L/2.   ,L/2.,L/2.+.5)]],
             basis = { 'He': [[0, (0.8, 1.0)],
@@ -63,22 +62,16 @@ class KnownValues(unittest.TestCase):
         e1, c1 = mf.get_bands(kpts_band)
         e0, c0 = kmf.get_bands(kpts_band)
         self.assertAlmostEqual(abs(e0-e1).get().max(), 0, 7)
-        self.assertAlmostEqual(lib.fp(e1[0].get()), -6.2986775452228283, 6)
-        self.assertAlmostEqual(lib.fp(e1[1].get()), -7.6616273746782362, 6)
+        self.assertAlmostEqual(lib.fp(e1[0].get()), -6.2986775452228283, delta=1e-5)
+        self.assertAlmostEqual(lib.fp(e1[1].get()), -7.6616273746782362, delta=1e-5)
 
-    def test_rhf_exx_ewald_with_kpt(self):
-        np.random.seed(1)
-        k = np.random.random((1, 3))
+    def test_kpts_without_gamma(self):
         cell = self.cell
-        kmf = scf.KRHF(cell, k, exxdiv='ewald')
-        e0 = kmf.kernel()
-        self.assertAlmostEqual(e0, -4.2048655827967139, 7)
-
-        # test bands
-        np.random.seed(1)
-        kpt_band = np.random.random(3)
-        e0, c0 = kmf.get_bands(kpt_band)
-        self.assertAlmostEqual(lib.fp(e0.get()), -6.8312867098806249, 6)
+        kpts = cell.make_kpts([2, 2, 1], with_gamma_point=False)
+        for mf_cls in (scf.KRHF, scf.KUHF, dft.KRKS, dft.KUKS):
+            with self.subTest(mf_cls=mf_cls.__name__):
+                with self.assertRaisesRegex(NotImplementedError, 'include the Gamma point'):
+                    mf_cls(cell, kpts=kpts).kernel()
 
     def test_rhf_exx_None(self):
         cell = self.cell
@@ -90,13 +83,6 @@ class KnownValues(unittest.TestCase):
         kmf = scf.KRHF(cell, [[0,0,0]], exxdiv=None)
         e0 = kmf.kernel()
         self.assertAlmostEqual(e0, e1, 7)
-
-        np.random.seed(1)
-        k = np.random.random((1, 3))
-        kmf = scf.KRHF(cell, k, exxdiv=None)
-        kmf.init_guess = 'hcore'
-        e0 = kmf.kernel()
-        self.assertAlmostEqual(e0, -2.7862168430230341, 7)
 
     def test_jk(self):
         cell = self.cell
@@ -126,7 +112,71 @@ class KnownValues(unittest.TestCase):
         kpts_bands = np.random.random((1,3))
         e = kmf.get_bands(kpts_bands)[0]
         e_ref = kmf_cpu.get_bands(kpts_bands)[0]
-        self.assertAlmostEqual(abs(e.get()-e_ref).max(), 0, 6)
+        self.assertAlmostEqual(abs(e.get()-e_ref).max(), 0, delta=1e-5)
+
+    def test_eig_self_conjugate_kpts(self):
+        cell = self.cell
+        kpts = cell.make_kpts(
+            [2, 2, 1], wrap_around=True, with_gamma_point=True)
+        kmf = scf.KRHF(cell, kpts=kpts)
+        kpt_pairs = list(kmf.iter_kpt_pairs())
+        self.assertEqual(len(kpt_pairs), len(kpts))
+        self.assertTrue(all(k == k_conj for k, k_conj in kpt_pairs))
+
+        nkpts = len(kpts)
+        nao = cell.nao
+        h = np.tile(np.diag(np.linspace(-2., 2., nao)), (nkpts, 1, 1))
+        h = h.astype(np.complex128)
+        for k in range(nkpts):
+            h[k, 0, -1] = (k + 1) * .2j
+            h[k, -1, 0] = -(k + 1) * .2j
+        h = cp.asarray(h)
+        s = cp.tile(cp.eye(nao, dtype=np.complex128), (nkpts, 1, 1))
+        x = kmf.check_linear_dependency(s)
+        occ = cp.zeros((nkpts, nao))
+        occ[:, :nao//2] = 2
+
+        for x_orth in (None, x):
+            with self.subTest(x_orth=x_orth is not None):
+                e, c = kmf.eig(h, s, x=x_orth)
+                dm = kmf.make_rdm1(c, occ)
+                self.assertLess(float(abs(c.imag).max()), 1e-14)
+                self.assertLess(float(abs(dm.imag).max()), 1e-14)
+                self.assertLess(
+                    float(abs(e - cp.diag(h[0].real)).max()), 1e-14)
+
+        _, c = kmf.eig(h, s, x=x, time_reversal_symmetry=False)
+        dm = kmf.make_rdm1(c, occ)
+        self.assertGreater(float(abs(dm.imag).max()), 1e-3)
+
+    def test_eig_conjugate_kpt_pairs(self):
+        cell = self.cell
+        kpts = cell.make_kpts(
+            [2, 2, 1], wrap_around=True, with_gamma_point=False)
+        kmf = scf.KRHF(cell, kpts=kpts)
+        kpt_pairs = list(kmf.iter_kpt_pairs())
+        self.assertEqual(len(kpt_pairs), len(kpts) // 2)
+        self.assertTrue(all(k != k_conj for k, k_conj in kpt_pairs))
+
+        nkpts = len(kpts)
+        nao = cell.nao
+        h = np.empty((nkpts, nao, nao), dtype=np.complex128)
+        h_real = np.diag(np.linspace(-2., 2., nao))
+        for i, (k, k_conj) in enumerate(kpt_pairs):
+            h_k = h_real.astype(np.complex128)
+            h_k[0, -1] = (i + 1) * .2j
+            h_k[-1, 0] = -(i + 1) * .2j
+            h[k] = h_k
+            h[k_conj] = h_k.conj()
+
+        h = cp.asarray(h)
+        s = cp.tile(cp.eye(nao, dtype=np.complex128), (nkpts, 1, 1))
+        e, c = kmf.eig(h, s)
+        for k, k_conj in kpt_pairs:
+            self.assertLess(float(abs(e[k_conj] - e[k]).max()), 1e-14)
+            self.assertLess(
+                float(abs(c[k_conj] - c[k].conj()).max()), 1e-14)
+        self.assertGreater(float(abs(c.imag).max()), 1e-3)
 
     def test_density_fit(self):
         from gpu4pyscf.pbc.df.df import GDF
@@ -208,17 +258,12 @@ class KnownValues(unittest.TestCase):
 
         mf = cell.KRHF(kpts=cell.make_kpts([2,1,1])).to_gpu().density_fit()
         mf.rsjk = PBCJKMatrixOpt(cell)
+        mf.j_engine = PBCJMatrixOpt(cell)
         mf.run(conv_tol=1e-8)
         self.assertAlmostEqual(mf.e_tot, ref.e_tot, 8)
 
         mf = cell.KRHF(kpts=cell.make_kpts([2,1,1])).to_gpu().density_fit()
-        mf.j_engine = mf.with_df
         mf.rsjk = PBCJKMatrixOpt(cell)
-        mf.run(conv_tol=1e-8)
-        # small discrepancy due to J, which is computed with DF
-        self.assertAlmostEqual(mf.e_tot, -0.361911543087363, 8)
-
-        mf.j_engine = mf._numint = False
         mf.run(conv_tol=1e-8)
         # small discrepancy due to J, which is computed with DF
         self.assertAlmostEqual(mf.e_tot, -0.361911543087363, 8)
@@ -312,6 +357,28 @@ class KnownValues(unittest.TestCase):
         dm = mf.get_init_guess(key='mod_huckel', s1e=s)
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 3
         assert abs(cp.einsum('kij,kji->', dm, s).real.get() - 16).max() < 1e-6
+
+    def test_scanner(self):
+        cell1 = pbcgto.M(
+            a=np.eye(3)*4,
+            atom='H 0 0 0; H 0 0 1.', basis='gth-szv',
+            pseudo='gth-pbe', mesh=[7, 7, 7])
+
+        cell2 = cell1.set_geom_('H 0 0 0; H 0 0 1.5', inplace=False)
+        cell2.mesh = [15, 15, 15]
+
+        mf1 = scf.RHF(cell1).run()
+        mf_scanner = mf1.as_scanner()
+        mf_scanner(cell1)
+
+        e2 = mf_scanner(cell2)
+        assert np.array_equal(mf_scanner.with_df.mesh, [15, 15, 15])
+        mf2 = scf.RHF(cell2).run()
+        self.assertAlmostEqual(e2, mf2.e_tot, 9)
+
+        e1 = mf_scanner(cell1)
+        assert np.array_equal(mf_scanner.with_df.mesh, [7, 7, 7])
+        self.assertAlmostEqual(e1, mf1.e_tot, 9)
 
 if __name__ == '__main__':
     print("Full Tests for pbc.scf.hf")

@@ -150,7 +150,7 @@ class PBCJMatrixOpt:
             dms = transpose_sum(dms)
             dms *= .5
 
-        kpts, is_single_kpt = _check_kpts(kpts, dm)
+        kpts, is_single_kpt = _check_kpts(kpts)
         is_gamma_point = is_zero(kpts)
         if is_gamma_point:
             if is_single_kpt:
@@ -220,11 +220,12 @@ class PBCJMatrixOpt:
         dm_cond = None
 
         # TODO: 8-fold symmetry
-        tasks = ((i,j,k,l)
-                 for i in range(n_groups)
-                 for j in range(i+1)
-                 for k in range(n_groups)
-                 for l in range(k+1))
+        # Materialize task metadata before sharing the iterator across workers.
+        tasks = iter([(i,j,k,l)
+                      for i in range(n_groups)
+                      for j in range(i+1)
+                      for k in range(n_groups)
+                      for l in range(k+1)])
 
         def proc(dm_xyz):
             device_id = cp.cuda.device.get_device_id()
@@ -350,7 +351,7 @@ class PBCJMatrixOpt:
         vj += self._get_j_lr(dm, hermi, kpts, kpts_band)
         return vj
 
-    def weighted_coulG(self, kpt=None, exx=None, mesh=None, omega=None, kpts=None):
+    def weighted_coulG(self, kpt=None, exx=None, mesh=None, omega=None, **kwargs):
         '''weighted LR Coulomb kernel. Mimic AFTDF.weighted_coulG'''
         if mesh is None:
             mesh = self.mesh

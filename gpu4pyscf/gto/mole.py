@@ -19,10 +19,11 @@ import numpy as np
 import cupy as cp
 import scipy.linalg
 from pyscf import gto
+from pyscf.lib.misc import _blocksize_partition
 from pyscf.pbc import gto as pbcgto
 from pyscf.gto import (ANG_OF, ATOM_OF, NPRIM_OF, NCTR_OF, PTR_COORD, PTR_COEFF,
                        PTR_EXP)
-from gpu4pyscf.lib.utils import load_library
+from gpu4pyscf.lib.utils import load_library, indices_within_groups
 from gpu4pyscf.lib import multi_gpu
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.cupy_helper import block_diag, asarray, ndarray
@@ -315,13 +316,19 @@ def group_basis(mol, tile=1, group_size=None, return_bas_mapping=False,
         else:
             return mol, ao_idx, l_ctr_pad_counts, uniq_l_ctr, l_ctr_counts
 
-def _split_l_ctr_groups(uniq_l_ctr, l_ctr_counts, group_size, align=1):
+def _split_l_ctr_groups(uniq_l_ctr, l_ctr_counts, group_size, align=1,
+                        orig_shell_idx=None):
     '''Splits l_ctr patterns into small groups with group_size the maximum
-    number of AOs in each group
+    number of AOs in each group. If orig_shell_idx is provided, boundaries
+    within each pattern must also separate original contracted shells.
     '''
     _l_ctrs = []
     _l_ctr_counts = []
+    offset = 0
     for l_ctr, counts in zip(uniq_l_ctr, l_ctr_counts):
+        if orig_shell_idx is not None:
+            shell_ids = orig_shell_idx[offset:offset+counts]
+        offset += counts
         l = l_ctr[0]
         nf = (l + 1) * (l + 2) // 2
         if isinstance(group_size, (int, np.integer)):
@@ -335,12 +342,24 @@ def _split_l_ctr_groups(uniq_l_ctr, l_ctr_counts, group_size, align=1):
             _l_ctr_counts.append(counts)
             continue
 
+        if orig_shell_idx is not None:
+            # Stable sorting keeps each original shell's contributions
+            # contiguous within this (l, nprim) pattern.
+            changes = np.flatnonzero(shell_ids[1:] != shell_ids[:-1]) + 1
+            shell_offsets = np.concatenate(([0], changes, [counts]))
+            splits = _blocksize_partition(shell_offsets, max_shells)
+            sub_counts = np.diff(shell_offsets[splits])
+            _l_ctrs.extend([l_ctr] * len(sub_counts))
+            _l_ctr_counts.extend(sub_counts)
+            continue
+
         nsubs, remaining = counts.__divmod__(max_shells)
         _l_ctrs.extend([l_ctr] * nsubs)
         _l_ctr_counts.extend([max_shells] * nsubs)
         if remaining > 0:
             _l_ctrs.append(l_ctr)
             _l_ctr_counts.append(remaining)
+
     uniq_l_ctr = np.vstack(_l_ctrs)
     l_ctr_counts = np.hstack(_l_ctr_counts)
     return uniq_l_ctr, l_ctr_counts
@@ -355,9 +374,22 @@ def extract_pgto_params(mol, op='diffuse'):
     if op != 'diffuse' and op != 'compact':
         raise RuntimeError(f'Unsupported operation {op}')
 
-    e = np.hstack(mol.bas_exps())
-    c = np.hstack([abs(mol._libcint_ctr_coeff(i)).max(axis=1)
-                   for i in range(mol.nbas)])
+    #:e = np.hstack(mol.bas_exps())
+    nprim = mol._bas[:,NPRIM_OF]
+    ptr = np.repeat(mol._bas[:,PTR_EXP], nprim)
+    e = mol._env[ptr + indices_within_groups(nprim)]
+
+    #:c = np.hstack([abs(mol._libcint_ctr_coeff(i)).max(axis=1)
+    #:               for i in range(mol.nbas)])
+    nctr = mol._bas[:,NCTR_OF]
+    sizes = nprim * nctr
+    ptr = np.repeat(mol._bas[:,PTR_COEFF], sizes)
+    idx = indices_within_groups(sizes)
+    offsets = np.append(0, np.cumsum(nprim)[:-1])
+    out_idx = np.repeat(offsets, sizes) + idx % np.repeat(nprim, sizes)
+    c = np.full(len(e), -np.inf)
+    np.maximum.at(c, out_idx, abs(mol._env[ptr + idx]))
+
     l = np.repeat(mol._bas[:,ANG_OF], mol._bas[:,NPRIM_OF])
     basis_id = np.repeat(np.arange(mol.nbas), mol._bas[:,NPRIM_OF])
     if isinstance(mol, pbcgto.Cell):
@@ -368,12 +400,16 @@ def extract_pgto_params(mol, op='diffuse'):
         # A quick estimation for the radius that each primitive GTO decays to the
         # value smaller than the required precision
         # c * r2**(l/2) * ((2*l+1)/4*np.pi)**.5 * exp(-e*r2) ~ precision
-        r2 = np.log((2*l+1)/(4*np.pi)/precision**2 * c**2 * 1e2**l + 1e-200) / (2*e)
+        tmp = (2*l+1)/(4*np.pi)/precision**2 * c**2 * 1e2**l
+        tmp[tmp <= 0] = 1e-200
+        r2 = np.log(tmp) / (2*e)
         idx = groupby(basis_id, r2, 'argmax')
     else:
         # A quick estimation for the resolution of planewaves that each
         # primitive GTO requires
-        ke = np.log(c**2 / precision * 50**l + 1e-200) * e
+        tmp = c**2 / precision * 50**l
+        tmp[tmp <= 0] = 1e-200
+        ke = np.log(tmp) * e
         idx = groupby(basis_id, ke, 'argmax')
     return e[idx], c[idx]
 
@@ -580,6 +616,22 @@ class SortedGTO:
     @classmethod
     def from_mol(cls, mol, *, group_size=None,
                  decontract=False, diffuse_cutoff=None):
+        '''Transforms generally contracted basis to segment contracted basis.
+
+        Parameters
+        ----------
+        group_size : int or sequence, optional
+            Limit group sizes without splitting an original contracted
+            shell's contributions within an (l, nprim) pattern. An integer
+            specifies Cartesian AOs; a sequence specifies shells per l.
+        decontract : bool, optional
+            If enabled, decontract generally contractions into primitives.
+            Otherwise, simply split general contractions into segment-contracted shells,
+            allowing repeated exponents in different shells.
+        diffuse_cutoff : float or None, optional
+            If set together with `decontract=True`, primitives with exponents
+            below this value are fully decontracted and treated as separate shells.
+        '''
         if isinstance(mol, SortedGTO):
             return mol
         elif not isinstance(mol, (pbcgto.Cell, gto.Mole)):
@@ -592,8 +644,8 @@ class SortedGTO:
         else:
             self = self.view(SortedMole)
         self.mol = self.cell = mol
-        self.recontract_bas = cp.asarray(recontract_bas, dtype=np.int32)
-        self.recontract_coef = cp.asarray(recontract_coef)
+        self.recontract_bas = np.asarray(recontract_bas, dtype=np.int32)
+        self.recontract_coef = np.asarray(recontract_coef)
 
         # Sort basis according to angular momentum and contraction patterns so
         # as to group the basis functions to blocks in GPU kernel.
@@ -605,32 +657,31 @@ class SortedGTO:
             l_ctrs_descend, return_index=True, return_inverse=True, return_counts=True, axis=0)
         uniq_l_ctr[:,1] = -uniq_l_ctr[:,1]
 
+        sorted_idx = np.argsort(inv_idx.ravel(), kind='stable')
+        self._bas = np.asarray(self._bas[sorted_idx], dtype=np.int32)
+        self.sorted_idx = sorted_idx
+        inv_sorted = np.empty(len(self._bas), dtype=np.int32)
+        inv_sorted[sorted_idx] = np.arange(len(self._bas))
+        # Maps generated shells in recontraction order to sorted shells.
+        # Each recontract_bas row starts at PTR_PBAS_IDX in this array.
+        self.recontraction_idx = inv_sorted
+
         # Limit the number of AOs in each group
         if group_size is not None:
             uniq_l_ctr, l_ctr_counts = _split_l_ctr_groups(
-                uniq_l_ctr, l_ctr_counts, group_size)
+                uniq_l_ctr, l_ctr_counts, group_size,
+                orig_shell_idx=self.get_orig_shell_idx())
 
         if mol.verbose >= logger.DEBUG1:
             logger.debug1(mol, 'Number of shells for each [l, nprim] group')
             for l_ctr, n in zip(uniq_l_ctr, l_ctr_counts):
                 logger.debug1(mol, '    %s : %s', l_ctr, n)
 
-        sorted_idx = np.argsort(inv_idx.ravel(), kind='stable')
-        self._bas = np.asarray(self._bas[sorted_idx], dtype=np.int32)
-
         # PTR_BAS_COORD is required by various CUDA kernels
         self._bas[:,PTR_BAS_COORD] = self._atm[self._bas[:,ATOM_OF],PTR_COORD]
 
         self.uniq_l_ctr = uniq_l_ctr
         self.l_ctr_counts = l_ctr_counts
-        self.sorted_idx = sorted_idx
-        inv_sorted = cp.empty(len(self._bas), dtype=np.int32)
-        inv_sorted[sorted_idx] = cp.arange(len(self._bas))
-        # recontraction_idx stores the indices of primitive shells (self._bas)
-        # for each original contracted shell (self.mol._bas). The offset of each
-        # contracted shell for recontraction_idx is provided by the
-        # recontract_bas[:,PTR_BAS_IDX]
-        self.recontraction_idx = inv_sorted
         self.p_ao_loc = self.ao_loc_nr(cart=True)
 
         # cache envs
@@ -646,12 +697,12 @@ class SortedGTO:
             dims = (l+1)*(l+2)//2 * self.recontract_bas[:,NCTR_OF]
         else:
             dims = (l*2+1) * self.recontract_bas[:,NCTR_OF]
-        return cp.append(np.int32(0), dims.cumsum(dtype=np.int32))
+        return cp.asarray(np.append(np.int32(0), dims.cumsum(dtype=np.int32)))
 
     def CT_dot_mat(self, mat, out=None):
         '''ctr_coeff.T.dot(mat)
         '''
-        mat = cp.asarray(mat, dtype=np.float64, order='C')
+        mat = cp.asarray(mat, order='C')
         mat_ndim = mat.ndim
         if mat_ndim == 1:
             return self.mat_dot_C(mat)
@@ -672,17 +723,23 @@ class SortedGTO:
         if out.size > 0:
             c_ao_loc = cp.asarray(self.c_ao_loc, dtype=np.int32)
             p_ao_loc = cp.asarray(self.p_ao_loc, dtype=np.int32)
-            err = kern(
-                ctypes.cast(out.data.ptr, ctypes.c_void_p),
-                ctypes.cast(mat.data.ptr, ctypes.c_void_p),
-                ctypes.cast(self.recontract_coef.data.ptr, ctypes.c_void_p),
-                ctypes.cast(self.recontract_bas.data.ptr, ctypes.c_void_p),
-                ctypes.cast(self.recontraction_idx.data.ptr, ctypes.c_void_p),
-                ctypes.cast(c_ao_loc.data.ptr, ctypes.c_void_p),
-                ctypes.cast(p_ao_loc.data.ptr, ctypes.c_void_p),
-                ctypes.c_int(len(self.recontract_bas)), ctypes.c_int(self.nbas),
-                ctypes.c_int(ncol), ctypes.c_int(counts))
-            assert err == 0
+            recontract_coef = cp.asarray(self.recontract_coef)
+            recontract_bas = cp.asarray(self.recontract_bas)
+            recontraction_idx = cp.asarray(self.recontraction_idx)
+            # CUDA grid.z is limited to 65535; these slices are zero-copy views.
+            for p0 in range(0, counts, 65535):
+                p1 = min(p0 + 65535, counts)
+                err = kern(
+                    ctypes.cast(out[p0:p1].data.ptr, ctypes.c_void_p),
+                    ctypes.cast(mat[p0:p1].data.ptr, ctypes.c_void_p),
+                    ctypes.cast(recontract_coef.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(recontract_bas.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(recontraction_idx.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(c_ao_loc.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(p_ao_loc.data.ptr, ctypes.c_void_p),
+                    ctypes.c_int(len(recontract_bas)), ctypes.c_int(self.nbas),
+                    ctypes.c_int(ncol), ctypes.c_int(p1 - p0))
+                assert err == 0
 
         if mat.dtype == np.complex128:
             out = out.view(np.complex128)
@@ -692,7 +749,7 @@ class SortedGTO:
 
     def C_dot_mat(self, mat, out=None):
         '''ctr_coeff.dot(mat)'''
-        mat = cp.asarray(mat, dtype=np.float64, order='C')
+        mat = cp.asarray(mat, order='C')
         mat_ndim = mat.ndim
         if mat_ndim == 1:
             return self.mat_dot_CT(mat)
@@ -713,15 +770,18 @@ class SortedGTO:
         if out.size > 0:
             c_ao_loc = cp.asarray(self.c_ao_loc, dtype=np.int32)
             p_ao_loc = cp.asarray(self.p_ao_loc, dtype=np.int32)
+            recontract_coef = cp.asarray(self.recontract_coef)
+            recontract_bas = cp.asarray(self.recontract_bas)
+            recontraction_idx = cp.asarray(self.recontraction_idx)
             err = kern(
                 ctypes.cast(out.data.ptr, ctypes.c_void_p),
                 ctypes.cast(mat.data.ptr, ctypes.c_void_p),
-                ctypes.cast(self.recontract_coef.data.ptr, ctypes.c_void_p),
-                ctypes.cast(self.recontract_bas.data.ptr, ctypes.c_void_p),
-                ctypes.cast(self.recontraction_idx.data.ptr, ctypes.c_void_p),
+                ctypes.cast(recontract_coef.data.ptr, ctypes.c_void_p),
+                ctypes.cast(recontract_bas.data.ptr, ctypes.c_void_p),
+                ctypes.cast(recontraction_idx.data.ptr, ctypes.c_void_p),
                 ctypes.cast(c_ao_loc.data.ptr, ctypes.c_void_p),
                 ctypes.cast(p_ao_loc.data.ptr, ctypes.c_void_p),
-                ctypes.c_int(len(self.recontract_bas)), ctypes.c_int(self.nbas),
+                ctypes.c_int(len(recontract_bas)), ctypes.c_int(self.nbas),
                 ctypes.c_int(ncol), ctypes.c_int(counts))
             assert err == 0
 
@@ -756,15 +816,18 @@ class SortedGTO:
         if out.size > 0:
             c_ao_loc = cp.asarray(self.c_ao_loc, dtype=np.int32)
             p_ao_loc = cp.asarray(self.p_ao_loc, dtype=np.int32)
+            recontract_coef = cp.asarray(self.recontract_coef)
+            recontract_bas = cp.asarray(self.recontract_bas)
+            recontraction_idx = cp.asarray(self.recontraction_idx)
             err = kern(
                 ctypes.cast(out.data.ptr, ctypes.c_void_p),
                 ctypes.cast(mat.data.ptr, ctypes.c_void_p),
-                ctypes.cast(self.recontract_coef.data.ptr, ctypes.c_void_p),
-                ctypes.cast(self.recontract_bas.data.ptr, ctypes.c_void_p),
-                ctypes.cast(self.recontraction_idx.data.ptr, ctypes.c_void_p),
+                ctypes.cast(recontract_coef.data.ptr, ctypes.c_void_p),
+                ctypes.cast(recontract_bas.data.ptr, ctypes.c_void_p),
+                ctypes.cast(recontraction_idx.data.ptr, ctypes.c_void_p),
                 ctypes.cast(c_ao_loc.data.ptr, ctypes.c_void_p),
                 ctypes.cast(p_ao_loc.data.ptr, ctypes.c_void_p),
-                ctypes.c_int(len(self.recontract_bas)), ctypes.c_int(self.nbas),
+                ctypes.c_int(len(recontract_bas)), ctypes.c_int(self.nbas),
                 ctypes.c_int(nrow*counts))
             assert err == 0
 
@@ -804,15 +867,18 @@ class SortedGTO:
         if out.size > 0:
             c_ao_loc = cp.asarray(self.c_ao_loc, dtype=np.int32)
             p_ao_loc = cp.asarray(self.p_ao_loc, dtype=np.int32)
+            recontract_coef = cp.asarray(self.recontract_coef)
+            recontract_bas = cp.asarray(self.recontract_bas)
+            recontraction_idx = cp.asarray(self.recontraction_idx)
             err = kern(
                 ctypes.cast(out.data.ptr, ctypes.c_void_p),
                 ctypes.cast(mat.data.ptr, ctypes.c_void_p),
-                ctypes.cast(self.recontract_coef.data.ptr, ctypes.c_void_p),
-                ctypes.cast(self.recontract_bas.data.ptr, ctypes.c_void_p),
-                ctypes.cast(self.recontraction_idx.data.ptr, ctypes.c_void_p),
+                ctypes.cast(recontract_coef.data.ptr, ctypes.c_void_p),
+                ctypes.cast(recontract_bas.data.ptr, ctypes.c_void_p),
+                ctypes.cast(recontraction_idx.data.ptr, ctypes.c_void_p),
                 ctypes.cast(c_ao_loc.data.ptr, ctypes.c_void_p),
                 ctypes.cast(p_ao_loc.data.ptr, ctypes.c_void_p),
-                ctypes.c_int(len(self.recontract_bas)), ctypes.c_int(self.nbas),
+                ctypes.c_int(len(recontract_bas)), ctypes.c_int(self.nbas),
                 ctypes.c_int(nrow*counts))
             assert err == 0
 
@@ -914,6 +980,29 @@ class SortedGTO:
         mat = cp.eye(self.mol.nao)
         return self.C_dot_mat(mat)
 
+    def get_ao_idx(self, cart=None):
+        '''The ao_idx can transform the Cartesian AOs in the sorted mol (self)
+        to the AOs in the original mol: mol.ao == sorted_mol.ao[ao_idx]'''
+        if cart is None:
+            cart = self.cart
+        ao_loc = self.ao_loc_nr(cart)
+        nao = ao_loc[-1]
+        idx = np.split(np.arange(nao), ao_loc[1:-1])
+
+        sorted_idx = self.sorted_idx
+        inv_sorted = np.empty_like(sorted_idx)
+        inv_sorted[sorted_idx] = np.arange(len(sorted_idx))
+
+        return np.hstack([idx[i] for i in inv_sorted])
+
+    def get_orig_shell_idx(self):
+        """Map each sorted shell to its original shell in self.cell._bas."""
+        shell_idx = np.empty(self.nbas, dtype=np.int32)
+        libvhf_rys.get_orig_shell_idx(
+            shell_idx.ctypes, self.cell._bas.ctypes, ctypes.c_int(self.cell.nbas),
+            self.recontract_bas.ctypes, self.recontraction_idx.ctypes)
+        return shell_idx
+
     @property
     def rys_envs(self):
         raise NotImplementedError
@@ -931,7 +1020,7 @@ class SortedMole(Mole, SortedGTO):
     def shell_overlap_mask(self, hermi=1, precision=1e-16):
         '''absmax(<i|j>) > precision for each shell pair'''
         from gpu4pyscf.pbc.gto.int1e import _shell_overlap_mask
-        return _shell_overlap_mask(self, hermi, precision)
+        return _shell_overlap_mask(self, hermi, precision)[:,0]
 
     def generate_shl_pairs(self, hermi=1, mask=None):
         if mask is None:
@@ -964,20 +1053,31 @@ class SortedMole(Mole, SortedGTO):
         bas_ij_idx = []
         shl_pair_offsets = []
         sp0 = sp1 = 0
-        l = self.uniq_l_ctr[:,0]
         for (i, j), bas_ij in bas_ij_cache.items():
             bas_ij_idx.append(cp.asarray(bas_ij))
             sp0, sp1 = sp1, sp1 + len(bas_ij)
             if isinstance(nsp_per_block, (int, np.integer)):
                 batch_size = nsp_per_block
             else:
+                l = self.uniq_l_ctr[:,0]
                 batch_size = nsp_per_block[l[i], l[j]]
             shl_pair_offsets.append(cp.arange(
                 sp0, sp1, batch_size, dtype=np.int32))
-        bas_ij_idx = cp.asarray(cp.hstack(bas_ij_idx), dtype=np.int32)
+        bas_ij_idx = cp.asarray(cp.hstack(bas_ij_idx), dtype=np.uint32)
         shl_pair_offsets.append(np.int32(sp1))
         shl_pair_offsets = cp.asarray(cp.hstack(shl_pair_offsets), dtype=np.int32)
         return bas_ij_idx, shl_pair_offsets
+
+    def iter_pair_by_l(self, bas_ij_pairs):
+        '''Iterate over the bas_ij pair in bas_ij_pairs based on the angular
+        momentum of the two bases of each pair
+        '''
+        uniq_l = self.uniq_l_ctr[:,0].tolist()
+        li_lj = [uniq_l[i]*8+uniq_l[j] for i, j in bas_ij_pairs]
+        sorted_pairs = (k for _, k in sorted(zip(li_lj, bas_ij_pairs)))
+        if isinstance(bas_ij_pairs, dict):
+            return ((key, bas_ij_pairs[key]) for key in sorted_pairs)
+        return sorted_pairs
 
 class SortedCell(Cell, SortedGTO):
     @multi_gpu.property(cache='_rys_envs')
@@ -1029,8 +1129,8 @@ class RysIntEnvVars(ctypes.Structure):
 
 class PBCIntEnvVars(ctypes.Structure):
     _fields_ = [
-        ('natm', ctypes.c_int),
-        ('nbas', ctypes.c_int),
+        ('natm', ctypes.c_int), # number of atoms in unit cell
+        ('nbas', ctypes.c_int), # number of shells in unit cell
         ('atm', ctypes.c_void_p),
         ('bas', ctypes.c_void_p),
         ('env', ctypes.c_void_p),
@@ -1053,6 +1153,14 @@ class PBCIntEnvVars(ctypes.Structure):
         obj._env_ref_holder = (atm, bas, env, ao_loc, Ls)
         return obj
 
+    @classmethod
+    def from_RysIntEnvs(cls, rys_envs):
+        if isinstance(rys_envs, PBCIntEnvVars):
+            return rys_envs
+        atm, bas, env, ao_loc = rys_envs._env_ref_holder
+        Ls = cp.zeros((1, 3))
+        return cls.new(rys_envs.natm, rys_envs.nbas, 1, 1, atm, bas, env, ao_loc, Ls)
+
     def copy(self):
         atm, bas, env, ao_loc, Ls = self._env_ref_holder
         return PBCIntEnvVars.new(
@@ -1073,8 +1181,12 @@ def _scale_sp_ctr_coeff(mol):
     fac = ((ls[idx]*2+1) / (4*np.pi)) ** .5
     nprim = mol._bas[idx,NPRIM_OF]
     nctr = mol._bas[idx,NCTR_OF]
-    for p, n, f in zip(ptr, nprim*nctr, fac):
-        _env[p:p+n] *= f
+    #:for p, n, f in zip(ptr, nprim*nctr, fac):
+    #:    _env[p:p+n] *= f
+    sizes = nprim * nctr
+    ptr = np.repeat(ptr, sizes)
+    fac = np.repeat(fac, sizes)
+    _env[ptr + indices_within_groups(sizes)] *= fac
     return _env
 
 PTR_PBAS_IDX = 4
@@ -1224,48 +1336,41 @@ def _recontract_basis(mol, decontract=False, diffuse_cutoff=None):
     recontract_bas = []
     pbas_idx_size = 0
     ptr_coef = 0
-    aoslices = mol.aoslice_by_atom()
-    for ia, (ib0, ib1) in enumerate(aoslices[:,:2]):
-        if ib0 == ib1:
-            continue
-        key = tuple(mol._bas[ib0:ib1,PTR_COEFF])
+
+    for shell in mol._bas:
+        ia = shell[ATOM_OF]
+        key = int(shell[PTR_COEFF])
         if key not in bas_templates:
-            bas_of_ia = []
             recontract = []
             pidx_offset = 0
-            for shell in mol._bas[ib0:ib1]:
-                l = shell[ANG_OF]
-                nprim = shell[NPRIM_OF]
-                nctr = shell[NCTR_OF]
+            l = shell[ANG_OF]
+            nprim = shell[NPRIM_OF]
+            nctr = shell[NCTR_OF]
 
-                if not decontract:
-                    shells, p2c_bas, c = _split_shell(shell, _env)
-                    nprim = len(shells)
-                    p2c_bas[:,PTR_COEFF] += ptr_coef
-                    p2c_bas[:,PTR_PBAS_IDX] += pidx_offset
-                    recontract.append(p2c_bas)
-                else:
-                    shells, c = _optimize_contraction(shell, _env, diffuse_cutoff)
-                    nprim = len(shells)
-                    recontract.append(
-                        np.array([ia, l, nprim, nctr, pidx_offset, 0, ptr_coef, 0], dtype=np.int32))
-                bas_of_ia.append(shells)
-                ctr_coef.append(c.ravel())
-                pidx_offset += len(shells)
-                ptr_coef += c.size
+            if not decontract:
+                shells, recontract, c = _split_shell(shell, _env)
+                nprim = len(shells)
+                recontract[:,PTR_COEFF] += ptr_coef
+                recontract[:,PTR_PBAS_IDX] += pidx_offset
+            else:
+                shells, c = _optimize_contraction(shell, _env, diffuse_cutoff)
+                nprim = len(shells)
+                recontract = np.array([[ia, l, nprim, nctr, pidx_offset, 0, ptr_coef, 0]], dtype=np.int32)
+            ctr_coef.append(c.ravel())
+            pidx_offset += len(shells)
+            ptr_coef += c.size
+            bas_templates[key] = (shells, recontract)
 
-            bas_templates[key] = (np.vstack(bas_of_ia), np.vstack(recontract))
-
-        bas_of_ia, recontract = bas_templates[key]
-        bas_of_ia = bas_of_ia.copy()
-        bas_of_ia[:,ATOM_OF] = ia
-        _bas.append(bas_of_ia)
+        shells, recontract = bas_templates[key]
+        shells = shells.copy()
+        shells[:,ATOM_OF] = ia
+        _bas.append(shells)
 
         recontract = recontract.copy()
         recontract[:,ATOM_OF] = ia
         recontract[:,PTR_PBAS_IDX] += pbas_idx_size
         recontract_bas.append(recontract)
-        pbas_idx_size += len(bas_of_ia)
+        pbas_idx_size += len(shells)
 
     pmol = mol.copy(deep=False)
     pmol.cart = True

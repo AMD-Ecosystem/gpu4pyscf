@@ -1,28 +1,37 @@
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <cuda_runtime.h>
 #include <cuda.h>
-#include "gvhf-rys/rys_roots.cu"
-#include "gvhf-rys/rys_contract_k.cuh"
+
+
+#define KERNEL_ARGS \
+    double *out, PBCIntEnvVars& envs, uint32_t *img_pool, \
+    uint32_t *rem_task_idx, int num_ijk_tasks, int img_tile_size, \
+    ShellTripletTaskInfo *ijk_tasks_info, double *c2s_pool, double omega, \
+    int shm_size, int iprim, int jprim, int kprim, uint32_t *bas_ij_idx, \
+    int *ao_pair_loc, int ao_pair_offset, int aux_offset, \
+    int nauxbas, int naux, int to_sph, \
+    int thread_id, int worker_id, double *shared_memory
+
+#define LAUNCH_KERNEL(KERNEL) \
+    KERNEL(out, envs, img_pool, rem_task_idx, num_ijk_tasks, img_tile_size, \
+    ijk_tasks_info, c2s_pool, omega, shm_size, iprim, jprim, kprim, bas_ij_idx, ao_pair_loc, \
+    ao_pair_offset, aux_offset, nauxbas, naux, to_sph, thread_id, worker_id, shared_memory)
 
 
 __device__ __forceinline__
-void int3c2e_000(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
-        uint32_t *rem_task_idx, int num_ijk_tasks, int img_tile_size,
-        ShellTripletTaskInfo *ijk_tasks_info, double *c2s_pool,
-        int shm_size, int iprim, int jprim, int kprim, uint32_t *bas_ij_idx,
-        int *ao_pair_loc, int ao_pair_offset, int aux_offset,
-        int nauxbas, int naux, int to_sph)
+void int3c2e_000(KERNEL_ARGS)
 {
-    int st_id = threadIdx.x;
+    int st_id = thread_id;
     constexpr int nst_per_block = THREADS;
     int ncells = envs.bvk_ncells;
     int *bas = envs.bas;
     double *env = envs.env;
     double *img_coords = envs.img_coords;
     int nimgs = envs.nimgs;
-    extern __shared__ double rw[];
+    double *rw = shared_memory;
     for (int task_id = st_id; task_id < num_ijk_tasks; task_id += nst_per_block) {
         int ijk_id = rem_task_idx[task_id];
         ShellTripletTaskInfo *ijk_task = ijk_tasks_info + ijk_id;
@@ -80,7 +89,6 @@ void int3c2e_000(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
                 double ypq = yij - env[rk+1] - img_coords[kL*3+1];
                 double zpq = zij - env[rk+2] - img_coords[kL*3+2];
                 double rr = xpq*xpq + ypq*ypq + zpq*zpq;
-                double omega = env[PTR_RANGE_OMEGA];
                 double theta = aij * ak / (aij + ak);
                 double theta_rr = theta * rr;
                 rys_roots(1, theta_rr, rw+st_id, nst_per_block, 0, 1);
@@ -114,21 +122,16 @@ void int3c2e_000(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
 }
 
 __device__ __forceinline__
-void int3c2e_100(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
-        uint32_t *rem_task_idx, int num_ijk_tasks, int img_tile_size,
-        ShellTripletTaskInfo *ijk_tasks_info, double *c2s_pool,
-        int shm_size, int iprim, int jprim, int kprim, uint32_t *bas_ij_idx,
-        int *ao_pair_loc, int ao_pair_offset, int aux_offset,
-        int nauxbas, int naux, int to_sph)
+void int3c2e_100(KERNEL_ARGS)
 {
-    int st_id = threadIdx.x;
+    int st_id = thread_id;
     constexpr int nst_per_block = THREADS;
     int ncells = envs.bvk_ncells;
     int *bas = envs.bas;
     double *env = envs.env;
     double *img_coords = envs.img_coords;
     int nimgs = envs.nimgs;
-    extern __shared__ double rw[];
+    double *rw = shared_memory;
     for (int task_id = st_id; task_id < num_ijk_tasks; task_id += nst_per_block) {
         int ijk_id = rem_task_idx[task_id];
         ShellTripletTaskInfo *ijk_task = ijk_tasks_info + ijk_id;
@@ -186,7 +189,6 @@ void int3c2e_100(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
                 double ypq = yij - env[rk+1] - img_coords[kL*3+1];
                 double zpq = zij - env[rk+2] - img_coords[kL*3+2];
                 double rr = xpq*xpq + ypq*ypq + zpq*zpq;
-                double omega = env[PTR_RANGE_OMEGA];
                 double theta = aij * ak / (aij + ak);
                 double theta_rr = theta * rr;
                 rys_roots(1, theta_rr, rw+st_id, nst_per_block, 0, 1);
@@ -231,21 +233,16 @@ void int3c2e_100(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
 }
 
 __device__ __forceinline__
-void int3c2e_110(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
-        uint32_t *rem_task_idx, int num_ijk_tasks, int img_tile_size,
-        ShellTripletTaskInfo *ijk_tasks_info, double *c2s_pool,
-        int shm_size, int iprim, int jprim, int kprim, uint32_t *bas_ij_idx,
-        int *ao_pair_loc, int ao_pair_offset, int aux_offset,
-        int nauxbas, int naux, int to_sph)
+void int3c2e_110(KERNEL_ARGS)
 {
-    int st_id = threadIdx.x;
+    int st_id = thread_id;
     constexpr int nst_per_block = THREADS;
     int ncells = envs.bvk_ncells;
     int *bas = envs.bas;
     double *env = envs.env;
     double *img_coords = envs.img_coords;
     int nimgs = envs.nimgs;
-    extern __shared__ double rw[];
+    double *rw = shared_memory;
     for (int task_id = st_id; task_id < num_ijk_tasks; task_id += nst_per_block) {
         int ijk_id = rem_task_idx[task_id];
         ShellTripletTaskInfo *ijk_task = ijk_tasks_info + ijk_id;
@@ -303,7 +300,6 @@ void int3c2e_110(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
                 double ypq = yij - env[rk+1] - img_coords[kL*3+1];
                 double zpq = zij - env[rk+2] - img_coords[kL*3+2];
                 double rr = xpq*xpq + ypq*ypq + zpq*zpq;
-                double omega = env[PTR_RANGE_OMEGA];
                 double theta = aij * ak / (aij + ak);
                 double theta_rr = theta * rr;
                 rys_roots(2, theta_rr, rw+st_id, nst_per_block, 0, 1);
@@ -364,21 +360,16 @@ void int3c2e_110(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
 }
 
 __device__ __forceinline__
-void int3c2e_001(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
-        uint32_t *rem_task_idx, int num_ijk_tasks, int img_tile_size,
-        ShellTripletTaskInfo *ijk_tasks_info, double *c2s_pool,
-        int shm_size, int iprim, int jprim, int kprim, uint32_t *bas_ij_idx,
-        int *ao_pair_loc, int ao_pair_offset, int aux_offset,
-        int nauxbas, int naux, int to_sph)
+void int3c2e_001(KERNEL_ARGS)
 {
-    int st_id = threadIdx.x;
+    int st_id = thread_id;
     constexpr int nst_per_block = THREADS;
     int ncells = envs.bvk_ncells;
     int *bas = envs.bas;
     double *env = envs.env;
     double *img_coords = envs.img_coords;
     int nimgs = envs.nimgs;
-    extern __shared__ double rw[];
+    double *rw = shared_memory;
     for (int task_id = st_id; task_id < num_ijk_tasks; task_id += nst_per_block) {
         int ijk_id = rem_task_idx[task_id];
         ShellTripletTaskInfo *ijk_task = ijk_tasks_info + ijk_id;
@@ -436,7 +427,6 @@ void int3c2e_001(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
                 double ypq = yij - env[rk+1] - img_coords[kL*3+1];
                 double zpq = zij - env[rk+2] - img_coords[kL*3+2];
                 double rr = xpq*xpq + ypq*ypq + zpq*zpq;
-                double omega = env[PTR_RANGE_OMEGA];
                 double theta = aij * ak / (aij + ak);
                 double theta_rr = theta * rr;
                 rys_roots(1, theta_rr, rw+st_id, nst_per_block, 0, 1);
@@ -481,21 +471,16 @@ void int3c2e_001(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
 }
 
 __device__ __forceinline__
-void int3c2e_101(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
-        uint32_t *rem_task_idx, int num_ijk_tasks, int img_tile_size,
-        ShellTripletTaskInfo *ijk_tasks_info, double *c2s_pool,
-        int shm_size, int iprim, int jprim, int kprim, uint32_t *bas_ij_idx,
-        int *ao_pair_loc, int ao_pair_offset, int aux_offset,
-        int nauxbas, int naux, int to_sph)
+void int3c2e_101(KERNEL_ARGS)
 {
-    int st_id = threadIdx.x;
+    int st_id = thread_id;
     constexpr int nst_per_block = THREADS;
     int ncells = envs.bvk_ncells;
     int *bas = envs.bas;
     double *env = envs.env;
     double *img_coords = envs.img_coords;
     int nimgs = envs.nimgs;
-    extern __shared__ double rw[];
+    double *rw = shared_memory;
     for (int task_id = st_id; task_id < num_ijk_tasks; task_id += nst_per_block) {
         int ijk_id = rem_task_idx[task_id];
         ShellTripletTaskInfo *ijk_task = ijk_tasks_info + ijk_id;
@@ -553,7 +538,6 @@ void int3c2e_101(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
                 double ypq = yij - env[rk+1] - img_coords[kL*3+1];
                 double zpq = zij - env[rk+2] - img_coords[kL*3+2];
                 double rr = xpq*xpq + ypq*ypq + zpq*zpq;
-                double omega = env[PTR_RANGE_OMEGA];
                 double theta = aij * ak / (aij + ak);
                 double theta_rr = theta * rr;
                 rys_roots(2, theta_rr, rw+st_id, nst_per_block, 0, 1);
@@ -615,35 +599,26 @@ void int3c2e_101(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
 }
 
 __device__ inline
-int int3c2e_unrolled(double *out, PBCIntEnvVars& envs, uint32_t *img_pool,
+int int3c2e_unrolled(double *out, double omega, PBCIntEnvVars& envs, uint32_t *img_pool,
                      uint32_t *rem_task_idx, int num_ijk_tasks, int img_tile_size,
                      ShellTripletTaskInfo *ijk_tasks_info, double *c2s_pool,
                      int shm_size, int iprim, int jprim, int kprim, int li, int lj, int lk,
                      uint32_t *bas_ij_idx, int *ao_pair_loc,
-                     int ao_pair_offset, int aux_offset, int nauxbas, int naux, int to_sph)
+                     int ao_pair_offset, int aux_offset, int nauxbas, int naux, int to_sph,
+                     int thread_id, int worker_id, double *shared_memory)
 {
     int kij_type = lk*25 + li*5 + lj;
     switch (kij_type) {
     case 0: // li=0 lj=0 lk=0
-        int3c2e_000(out, envs, img_pool, rem_task_idx, num_ijk_tasks, img_tile_size,
-            ijk_tasks_info, c2s_pool, shm_size, iprim, jprim, kprim, bas_ij_idx, ao_pair_loc,
-            ao_pair_offset, aux_offset, nauxbas, naux, to_sph); break;
+        LAUNCH_KERNEL(int3c2e_000); break;
     case 5: // li=1 lj=0 lk=0
-        int3c2e_100(out, envs, img_pool, rem_task_idx, num_ijk_tasks, img_tile_size,
-            ijk_tasks_info, c2s_pool, shm_size, iprim, jprim, kprim, bas_ij_idx, ao_pair_loc,
-            ao_pair_offset, aux_offset, nauxbas, naux, to_sph); break;
+        LAUNCH_KERNEL(int3c2e_100); break;
     case 6: // li=1 lj=1 lk=0
-        int3c2e_110(out, envs, img_pool, rem_task_idx, num_ijk_tasks, img_tile_size,
-            ijk_tasks_info, c2s_pool, shm_size, iprim, jprim, kprim, bas_ij_idx, ao_pair_loc,
-            ao_pair_offset, aux_offset, nauxbas, naux, to_sph); break;
+        LAUNCH_KERNEL(int3c2e_110); break;
     case 25: // li=0 lj=0 lk=1
-        int3c2e_001(out, envs, img_pool, rem_task_idx, num_ijk_tasks, img_tile_size,
-            ijk_tasks_info, c2s_pool, shm_size, iprim, jprim, kprim, bas_ij_idx, ao_pair_loc,
-            ao_pair_offset, aux_offset, nauxbas, naux, to_sph); break;
+        LAUNCH_KERNEL(int3c2e_001); break;
     case 30: // li=1 lj=0 lk=1
-        int3c2e_101(out, envs, img_pool, rem_task_idx, num_ijk_tasks, img_tile_size,
-            ijk_tasks_info, c2s_pool, shm_size, iprim, jprim, kprim, bas_ij_idx, ao_pair_loc,
-            ao_pair_offset, aux_offset, nauxbas, naux, to_sph); break;
+        LAUNCH_KERNEL(int3c2e_101); break;
     default: return 0;
     }
     return 1;

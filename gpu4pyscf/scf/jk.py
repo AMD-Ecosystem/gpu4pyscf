@@ -27,12 +27,14 @@ from pyscf import lib, gto
 from pyscf.scf import _vhf
 from gpu4pyscf.lib.cupy_helper import (
     load_library, condense, transpose_sum, hermi_triu, asarray, ndarray)
+from gpu4pyscf.lib.utils import nearest_power2 as _nearest_power2
 from gpu4pyscf.__config__ import num_devices, shm_size
 from gpu4pyscf.__config__ import props as gpu_specs
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib import multi_gpu
 from gpu4pyscf.gto.mole import (
-    extract_pgto_params, _scale_sp_ctr_coeff, RysIntEnvVars, SortedGTO)
+    extract_pgto_params, _scale_sp_ctr_coeff, RysIntEnvVars, SortedGTO,
+    SortedMole)
 
 __all__ = [
     'get_jk', 'get_j', 'get_k',
@@ -43,13 +45,10 @@ libvhf_rys.RYS_build_jk.restype = ctypes.c_int
 libvhf_rys.RYS_build_k.restype = ctypes.c_int
 libvhf_rys.cuda_version.restype = ctypes.c_int
 CUDA_VERSION = libvhf_rys.cuda_version()
-libgint = load_library('libgint')
-
-libvhf_rys.RYS_init_constant()
 
 PTR_BAS_COORD = 7
 LMAX = 4
-TILE = 6
+TILE = 12
 QUEUE_DEPTH = 262144
 SHM_SIZE = shm_size - 1024
 del shm_size
@@ -58,11 +57,56 @@ THREADS = 256
 GROUP_SIZE = 256
 Q_COND_MARGIN = 4.
 
-libvhf_rys.RYS_build_k_init(ctypes.c_int(SHM_SIZE))
-libvhf_rys.RYS_build_jk_init(ctypes.c_int(SHM_SIZE))
+def get_jk(mol, dm, hermi=0, vhfopt=None, with_j=True, with_k=True,
+           omega=None, lr_factor=None, sr_factor=None, verbose=None):
+    r'''Compute Coulomb (J) and exchange (K) matrices.
 
-def get_jk(mol, dm, hermi=0, vhfopt=None, with_j=True, with_k=True, verbose=None):
-    '''Compute J, K matrices
+    Parameters
+    ----------
+    mol : pyscf.gto.Mole
+        Mole object that defines the basis set and molecular geometry.
+    dm : ndarray or sequence of ndarray
+        Density matrix or a sequence of density matrices. If multiple density
+        matrices are provided, the corresponding J and K matrices are computed
+        for each input density matrix.
+    hermi : int, optional
+        Symmetry of the density matrix:
+        - ``0``: no symmetry
+        - ``1``: Hermitian
+        - ``2``: anti-Hermitian
+    vhfopt : gpu4ypscf.scf.jk._VHFOpt object, optional
+        Handler for JK matrix computation.
+    with_j : bool, optional
+        Whether to compute the Coulomb (J) matrix. If ``False``, the returned
+        J matrix is ``None``.
+    with_k : bool, optional
+        Whether to compute the exchange (K) matrix. If ``False``, the returned
+        K matrix is ``None``.
+    omega : float, optional
+        Range-separation parameter. Together with ``lr_factor`` and
+        ``sr_factor``, defines the range-separated Coulomb operator used in
+        exchange (K) matrix evaluation:
+            lr_factor * erf(omega * r) / r + sr_factor * erfc(omega * r) / r.
+    lr_factor : float, optional
+        Scaling factor for the long-range interaction,
+    sr_factor : float, optional
+        Scaling factor for the short-range interaction,
+
+    Notes
+    -----
+    When omega, lr_factor, and sr_factor parameters are specified, the K matrix
+    is computed using the attenuated Coulomb operator. J matrix is always
+    computed using the standard Coulomb operator 1/r.
+
+    Returns
+    -------
+    (vj, vk)
+    vj : ndarray or sequence of ndarray or None
+        Coulomb matrices. The returned object has the same shape as the input
+        density matrices. Returns ``None`` if ``with_j`` is ``False``.
+    vk : ndarray or sequence of ndarray or None
+        Exchange matrices. The returned object has the same shape as the input
+        density matrices. Returns ``None`` if ``with_k`` is ``False``.
     '''
     assert with_j or with_k
     log = logger.new_logger(mol, verbose)
@@ -78,7 +122,18 @@ def get_jk(mol, dm, hermi=0, vhfopt=None, with_j=True, with_k=True, verbose=None
     dms = vhfopt.apply_coeff_C_mat_CT(dms)
     dms = cp.asarray(dms, order='C')
 
-    vj, vk = vhfopt.get_jk(dms, hermi, log)
+    omega, lr_factor, sr_factor = _check_rsh_factors(mol, omega, lr_factor, sr_factor)
+
+    if omega == 0:
+        vj, vk = vhfopt.get_jk(dms, hermi, log)
+    else:
+        if with_k:
+            vk = vhfopt.get_k(dms, hermi, log, omega, lr_factor, sr_factor)
+        if with_j:
+            dms = transpose_sum(dms)
+            dms *= .5
+            vj = vhfopt.get_j(dms, log)
+
     if with_k:
         #:vk = cp.einsum('pi,npq,qj->nij', vhfopt.coeff, vk, vhfopt.coeff)
         vk = vhfopt.apply_coeff_CT_mat_C(vk)
@@ -96,7 +151,38 @@ def get_jk(mol, dm, hermi=0, vhfopt=None, with_j=True, with_k=True, verbose=None
     return vj, vk
 
 def get_k(mol, dm, hermi=0, vhfopt=None, omega=None, lr_factor=None, sr_factor=None):
-    '''Compute K matrix
+    r'''Compute exchange (K) matrix.
+
+    Parameters
+    ----------
+    mol : pyscf.gto.Mole
+        Mole object that defines the basis set and molecular geometry.
+    dm : ndarray or sequence of ndarray
+        Density matrix or a sequence of density matrices. If multiple density
+        matrices are provided, the corresponding J and K matrices are computed
+        for each input density matrix.
+    hermi : int, optional
+        Symmetry of the density matrix:
+        - ``0``: no symmetry
+        - ``1``: Hermitian
+        - ``2``: anti-Hermitian
+    vhfopt : gpu4ypscf.scf.jk._VHFOpt object, optional
+        Handler for K matrix computation.
+    omega : float, optional
+        Range-separation parameter. Together with ``lr_factor`` and
+        ``sr_factor``, defines the range-separated Coulomb operator used in
+        exchange (K) matrix evaluation:
+            lr_factor * erf(omega * r) / r + sr_factor * erfc(omega * r) / r.
+    lr_factor : float, optional
+        Scaling factor for the long-range interaction,
+    sr_factor : float, optional
+        Scaling factor for the short-range interaction,
+
+    Returns
+    -------
+    vk : ndarray or sequence of ndarray
+        Exchange matrices. The returned object has the same shape as the input
+        density matrices.
     '''
     log = logger.new_logger(mol)
     cput0 = log.init_timer()
@@ -109,7 +195,6 @@ def get_k(mol, dm, hermi=0, vhfopt=None, omega=None, lr_factor=None, sr_factor=N
     dms = dm.reshape(-1,nao_orig,nao_orig)
     #:dms = cp.einsum('pi,nij,qj->npq', vhfopt.coeff, dms, vhfopt.coeff)
     dms = vhfopt.apply_coeff_C_mat_CT(dms)
-    dms = cp.asarray(dms, order='C')
 
     vk = vhfopt.get_k(dms, hermi, log, omega, lr_factor, sr_factor)
     #:vk = cp.einsum('pi,npq,qj->nij', vhfopt.coeff, vk, vhfopt.coeff)
@@ -133,14 +218,13 @@ def get_j(mol, dm, hermi=0, vhfopt=None, verbose=None):
     assert n_dm == 1
     #:dms = cp.einsum('pi,nij,qj->npq', vhfopt.coeff, dms, vhfopt.coeff)
     dms = vhfopt.apply_coeff_C_mat_CT(dms)
-    dms = cp.asarray(dms, order='C')
     if hermi != 1:
         dms = transpose_sum(dms)
         dms *= .5
 
     vj = vhfopt.get_j(dms, log)
-    #:vj = cp.einsum('pi,npq,qj->nij', vhfopt.coeff, cp.asarray(vj), vhfopt.coeff)
-    vj = vhfopt.apply_coeff_CT_mat_C(cp.asarray(vj))
+    #:vj = cp.einsum('pi,npq,qj->nij', vhfopt.coeff, vj, vhfopt.coeff)
+    vj = vhfopt.apply_coeff_CT_mat_C(vj)
     vj = vj.reshape(dm.shape)
     log.timer('vj', *cput0)
     return vj
@@ -151,6 +235,7 @@ def apply_coeff_C_mat_CT(spherical_matrix, mol, sorted_mol, uniq_l_ctr,
     Unsort AO and perform sph2cart transformation (if needed) for the last 2 axes
     Fused kernel to perform 'pi,nij,qj->npq'
     '''
+    libgint = load_library('libgint')
     spherical_matrix = cp.asarray(spherical_matrix, order='C')
     spherical_matrix_ndim = spherical_matrix.ndim
     if spherical_matrix_ndim == 2:
@@ -210,6 +295,7 @@ def apply_coeff_CT_mat_C(cartesian_matrix, mol, sorted_mol, uniq_l_ctr,
     Sort AO and perform cart2sph transformation (if needed) for the last 2 axes
     Fused kernel to perform 'pi,npq,qj->nij'
     '''
+    libgint = load_library('libgint')
     cartesian_matrix = cp.asarray(cartesian_matrix, order='C')
     cartesian_matrix_ndim = cartesian_matrix.ndim
     if cartesian_matrix_ndim == 2:
@@ -269,6 +355,7 @@ def apply_coeff_C_mat(right_matrix, mol, sorted_mol, uniq_l_ctr,
     Sort AO and perform sph2cart transformation (if needed) for the second last axis
     Fused kernel to perform 'pi,nij->npj'
     '''
+    libgint = load_library('libgint')
     right_matrix = cp.asarray(right_matrix, order='C')
     ndim = right_matrix.ndim
     if ndim == 2:
@@ -433,11 +520,12 @@ class _VHFOpt:
 
         diffuse_exps, diffuse_ctr_coef = extract_pgto_params(mol, 'diffuse')
 
-        tasks = ((i,j,k,l)
-                 for i in range(n_groups)
-                 for j in range(i+1)
-                 for k in range(i+1)
-                 for l in range(k+1))
+        # Share a list iterator: concurrent next() calls can re-enter a generator.
+        tasks = iter([(i,j,k,l)
+                      for i in range(n_groups)
+                      for j in range(i+1)
+                      for k in range(i+1)
+                      for l in range(k+1)])
 
         def proc(dms, dm_cond):
             device_id = cp.cuda.device.get_device_id()
@@ -463,6 +551,8 @@ class _VHFOpt:
             # An additional integer to count for the proccessed pair_ijs
             pool = cp.empty(workers*QUEUE_DEPTH+3, dtype=np.int32)
 
+            omega, lr_factor, sr_factor = 0., 1., 1.
+
             timing_collection = _TimingCollector(log.timer_debug1)
             kern_counts = 0
             kern = libvhf_rys.RYS_build_jk
@@ -477,32 +567,33 @@ class _VHFOpt:
                 if npairs_ij == 0 or npairs_kl == 0:
                     continue
                 llll = f'({l_symb[i]}{l_symb[j]}|{l_symb[k]}{l_symb[l]})'
-                blksize = QUEUE_DEPTH - 512
-                for b0, b1 in lib.prange(0, npairs_kl, blksize):
-                    err = kern(
-                        ctypes.cast(vj.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(vk.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(dms.data.ptr, ctypes.c_void_p),
-                        ctypes.c_int(n_dm), ctypes.c_int(nao),
-                        ctypes.byref(rys_envs), (ctypes.c_int*8)(*shls_slice),
-                        ctypes.c_int(SHM_SIZE),
-                        ctypes.c_int(npairs_ij), ctypes.c_int(b1-b0),
-                        ctypes.cast(pair_ij_mapping.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(pair_kl_mapping[b0:].data.ptr, ctypes.c_void_p),
-                        ctypes.cast(q_cond_ij.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(q_cond_kl[b0:].data.ptr, ctypes.c_void_p),
-                        ctypes.cast(s_cond_ij.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(s_cond_kl[b0:].data.ptr, ctypes.c_void_p),
-                        ctypes.cast(_diffuse_exps.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(dm_cond.data.ptr, ctypes.c_void_p),
-                        ctypes.c_float(log_cutoff),
-                        ctypes.c_float(dm_penalty),
-                        ctypes.cast(pool.data.ptr, ctypes.c_void_p),
-                        mol._atm.ctypes, ctypes.c_int(mol.natm),
-                        mol._bas.ctypes, ctypes.c_int(mol.nbas), mol._env.ctypes)
-                    if err != 0:
-                        raise RuntimeError(f'RYS_build_jk kernel for {llll} failed')
-                    kern_counts += 1
+                err = kern(
+                    ctypes.cast(vj.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(vk.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(dms.data.ptr, ctypes.c_void_p),
+                    ctypes.c_int(n_dm), ctypes.c_int(nao),
+                    ctypes.c_double(omega),
+                    ctypes.c_double(lr_factor),
+                    ctypes.c_double(sr_factor),
+                    ctypes.byref(rys_envs),
+                    (ctypes.c_int*8)(*shls_slice),
+                    ctypes.c_int(SHM_SIZE),
+                    ctypes.c_int(npairs_ij), ctypes.c_int(npairs_kl),
+                    ctypes.cast(pair_ij_mapping.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(pair_kl_mapping.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(q_cond_ij.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(q_cond_kl.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(s_cond_ij.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(s_cond_kl.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(_diffuse_exps.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(dm_cond.data.ptr, ctypes.c_void_p),
+                    ctypes.c_float(log_cutoff),
+                    ctypes.c_float(dm_penalty),
+                    ctypes.cast(pool.data.ptr, ctypes.c_void_p),
+                    mol._bas.ctypes, mol._env.ctypes)
+                if err != 0:
+                    raise RuntimeError(f'RYS_build_jk kernel for {llll} failed')
+                kern_counts += 1
                 if log.verbose >= logger.DEBUG1:
                     ntasks = npairs_ij * npairs_kl
                     msg = f'processing {llll} on Device {device_id} tasks ~= {ntasks}'
@@ -582,10 +673,13 @@ class _VHFOpt:
         if isinstance(dms, cp.ndarray):
             dms = dms.get()
         pair_loc = _make_j_engine_pair_locs(mol)
-        dm_xyz = np.empty(pair_loc[-1])
-        libvhf_rys.transform_cart_to_xyz(
-            dm_xyz.ctypes, dms.ctypes, ao_loc.ctypes, pair_loc.ctypes,
-            mol._bas.ctypes, ctypes.c_int(mol.nbas), mol._env.ctypes)
+        nao_pairs = pair_loc[-1]
+        dms = np.ascontiguousarray(dms)
+        dm_xyz = np.empty((n_dm, nao_pairs))
+        for i in range(n_dm):
+            libvhf_rys.transform_cart_to_xyz(
+                dm_xyz[i].ctypes, dms[i].ctypes, ao_loc.ctypes, pair_loc.ctypes,
+                mol._bas.ctypes, ctypes.c_int(mol.nbas), mol._env.ctypes)
 
         diffuse_exps, diffuse_ctr_coef = extract_pgto_params(mol, 'diffuse')
 
@@ -619,7 +713,7 @@ class _VHFOpt:
             bas_pair_cache = {k: [cp.asarray(x) for x in v]
                               for k, v in self.bas_pair_cache.items()}
 
-            err = libvhf_rys.RYS_init_rysj_constant(ctypes.c_int(SHM_SIZE))
+            err = libvhf_rys.RYS_init_rysj_constant()
             if err != 0:
                 raise RuntimeError('CUDA kernel initialization')
 
@@ -642,31 +736,29 @@ class _VHFOpt:
                     continue
                 scheme = schemes[task]
                 llll = f'({l_symb[i]}{l_symb[j]}|{l_symb[k]}{l_symb[l]})'
-                blksize = QUEUE_DEPTH - 512
-                for b0, b1 in lib.prange(0, npairs_kl, blksize):
-                    err = kern(
-                        ctypes.cast(vj_xyz.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(dm_xyz.data.ptr, ctypes.c_void_p),
-                        ctypes.c_int(n_dm), ctypes.c_int(nao),
-                        ctypes.byref(rys_envs), (ctypes.c_int*3)(*scheme),
-                        (ctypes.c_int*8)(*shls_slice),
-                        ctypes.c_int(npairs_ij), ctypes.c_int(b1-b0),
-                        ctypes.cast(pair_ij_mapping.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(pair_kl_mapping[b0:].data.ptr, ctypes.c_void_p),
-                        ctypes.cast(q_cond_ij.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(q_cond_kl[b0:].data.ptr, ctypes.c_void_p),
-                        ctypes.cast(s_cond_ij.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(s_cond_kl[b0:].data.ptr, ctypes.c_void_p),
-                        ctypes.cast(_diffuse_exps.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(dm_cond.data.ptr, ctypes.c_void_p),
-                        ctypes.c_float(log_cutoff),
-                        ctypes.c_float(dm_penalty),
-                        ctypes.cast(pool.data.ptr, ctypes.c_void_p),
-                        mol._atm.ctypes, ctypes.c_int(mol.natm),
-                        mol._bas.ctypes, ctypes.c_int(mol.nbas), mol._env.ctypes)
-                    if err != 0:
-                        raise RuntimeError(f'RYS_build_j kernel for {llll} failed')
-                    kern_counts += 1
+                err = kern(
+                    ctypes.cast(vj_xyz.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(dm_xyz.data.ptr, ctypes.c_void_p),
+                    ctypes.c_int(n_dm), ctypes.c_int(nao),
+                    ctypes.byref(rys_envs), (ctypes.c_int*3)(*scheme),
+                    (ctypes.c_int*8)(*shls_slice),
+                    ctypes.c_int(npairs_ij), ctypes.c_int(npairs_kl),
+                    ctypes.cast(pair_ij_mapping.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(pair_kl_mapping.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(q_cond_ij.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(q_cond_kl.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(s_cond_ij.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(s_cond_kl.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(_diffuse_exps.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(dm_cond.data.ptr, ctypes.c_void_p),
+                    ctypes.c_float(log_cutoff),
+                    ctypes.c_float(dm_penalty),
+                    ctypes.cast(pool.data.ptr, ctypes.c_void_p),
+                    mol._bas.ctypes, mol._env.ctypes,
+                    ctypes.c_int(nao_pairs))
+                if err != 0:
+                    raise RuntimeError(f'RYS_build_j kernel for {llll} failed')
+                kern_counts += 1
                 if log.verbose >= logger.DEBUG1:
                     ntasks = npairs_ij * npairs_kl
                     msg = f'processing {llll} on Device {device_id} tasks ~= {ntasks}'
@@ -685,9 +777,10 @@ class _VHFOpt:
         vj_xyz = multi_gpu.array_reduce([x[0] for x in results], inplace=True)
         vj_xyz = vj_xyz.get()
         vj = np.empty_like(dms)
-        libvhf_rys.transform_xyz_to_cart(
-            vj.ctypes, vj_xyz.ctypes, ao_loc.ctypes, pair_loc.ctypes,
-            mol._bas.ctypes, ctypes.c_int(mol.nbas), mol._env.ctypes)
+        for i in range(n_dm):
+            libvhf_rys.transform_xyz_to_cart(
+                vj[i].ctypes, vj_xyz[i].ctypes, ao_loc.ctypes, pair_loc.ctypes,
+                mol._bas.ctypes, ctypes.c_int(mol.nbas), mol._env.ctypes)
         vj = transpose_sum(asarray(vj))
         vj *= 2.
 
@@ -734,11 +827,12 @@ class _VHFOpt:
 
         omega, lr_factor, sr_factor = _check_rsh_factors(self.mol, omega, lr_factor, sr_factor)
 
-        tasks = ((i,j,k,l)
-                 for i in range(n_groups)
-                 for j in range(i+1)
-                 for k in range(i+1)
-                 for l in range(k+1))
+        # Share a list iterator: concurrent next() calls can re-enter a generator.
+        tasks = iter([(i,j,k,l)
+                      for i in range(n_groups)
+                      for j in range(i+1)
+                      for k in range(i+1)
+                      for l in range(k+1)])
 
         def proc(dms, dm_cond):
             device_id = cp.cuda.device.get_device_id()
@@ -776,33 +870,32 @@ class _VHFOpt:
                 if npairs_ij == 0 or npairs_kl == 0:
                     continue
                 llll = f'({l_symb[i]}{l_symb[j]}|{l_symb[k]}{l_symb[l]})'
-                blksize = QUEUE_DEPTH - 512
-                for b0, b1 in lib.prange(0, npairs_kl, blksize):
-                    err = kern(
-                        ctypes.cast(vk.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(dms.data.ptr, ctypes.c_void_p),
-                        ctypes.c_int(n_dm), ctypes.c_int(nao),
-                        ctypes.c_double(omega),
-                        ctypes.c_double(lr_factor), ctypes.c_double(sr_factor),
-                        ctypes.byref(rys_envs), (ctypes.c_int*8)(*shls_slice),
-                        ctypes.c_int(SHM_SIZE),
-                        ctypes.c_int(npairs_ij), ctypes.c_int(b1-b0),
-                        ctypes.cast(pair_ij_mapping.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(pair_kl_mapping[b0:].data.ptr, ctypes.c_void_p),
-                        ctypes.cast(q_cond_ij.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(q_cond_kl[b0:].data.ptr, ctypes.c_void_p),
-                        ctypes.cast(s_cond_ij.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(s_cond_kl[b0:].data.ptr, ctypes.c_void_p),
-                        ctypes.cast(_diffuse_exps.data.ptr, ctypes.c_void_p),
-                        ctypes.cast(dm_cond.data.ptr, ctypes.c_void_p),
-                        ctypes.c_float(log_cutoff),
-                        ctypes.c_float(dm_penalty),
-                        ctypes.cast(pool.data.ptr, ctypes.c_void_p),
-                        mol._atm.ctypes, ctypes.c_int(mol.natm),
-                        mol._bas.ctypes, ctypes.c_int(mol.nbas), mol._env.ctypes)
-                    if err != 0:
-                        raise RuntimeError(f'RYS_build_jk kernel for {llll} failed')
-                    kern_counts += 1
+                err = kern(
+                    ctypes.cast(vk.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(dms.data.ptr, ctypes.c_void_p),
+                    ctypes.c_int(n_dm), ctypes.c_int(nao),
+                    ctypes.c_double(omega),
+                    ctypes.c_double(lr_factor),
+                    ctypes.c_double(sr_factor),
+                    ctypes.byref(rys_envs),
+                    (ctypes.c_int*8)(*shls_slice),
+                    ctypes.c_int(SHM_SIZE),
+                    ctypes.c_int(npairs_ij), ctypes.c_int(npairs_kl),
+                    ctypes.cast(pair_ij_mapping.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(pair_kl_mapping.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(q_cond_ij.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(q_cond_kl.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(s_cond_ij.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(s_cond_kl.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(_diffuse_exps.data.ptr, ctypes.c_void_p),
+                    ctypes.cast(dm_cond.data.ptr, ctypes.c_void_p),
+                    ctypes.c_float(log_cutoff),
+                    ctypes.c_float(dm_penalty),
+                    ctypes.cast(pool.data.ptr, ctypes.c_void_p),
+                    mol._bas.ctypes)
+                if err != 0:
+                    raise RuntimeError(f'RYS_build_jk kernel for {llll} failed')
+                kern_counts += 1
                 if log.verbose >= logger.DEBUG1:
                     ntasks = npairs_ij * npairs_kl
                     msg = f'processing {llll} on Device {device_id} tasks ~= {ntasks}'
@@ -874,35 +967,6 @@ def _make_j_engine_pair_locs(mol):
     pair_loc = np.append(0, np.cumsum((ll+1)*(ll+2)*(ll+3)//6))
     return np.asarray(pair_loc, dtype=np.int32)
 
-def quartets_scheme(mol, l_ctr_pattern, with_j, with_k, shm_size=SHM_SIZE):
-    raise RuntimeError('deprecated')
-    ls = l_ctr_pattern[:,0]
-    li, lj, lk, ll = ls
-    order = li + lj + lk + ll
-    nfi = (li + 1) * (li + 2) // 2
-    nfj = (lj + 1) * (lj + 2) // 2
-    nfk = (lk + 1) * (lk + 2) // 2
-    nfl = (ll + 1) * (ll + 2) // 2
-    gout_size = nfi * nfj * nfk * nfl
-    g_size = (li+1)*(lj+1)*(lk+1)*(ll+1)
-    nps = l_ctr_pattern[:,1]
-    ij_prims = nps[0] * nps[1]
-    nroots = order // 2 + 1
-    jk_cache_size = 0
-    if with_j: jk_cache_size += nfi*nfj + nfk*nfl
-    if with_k: jk_cache_size += nfi*nfk + nfi*nfl + nfj*nfk + nfj*nfl
-    root_g_jk_cache_shared = max(nroots*2 + g_size*3, jk_cache_size)
-    unit = root_g_jk_cache_shared + ij_prims + 8
-    if mol.omega < 0: # SR
-        unit += nroots * 2
-    counts = shm_size // (unit*8)
-    n = min(THREADS, _nearest_power2(counts))
-    gout_stride = THREADS // n
-    while gout_stride < 16 and gout_size / (gout_stride*GOUT_WIDTH) > 1:
-        n //= 2
-        gout_stride *= 2
-    return n, gout_stride
-
 def _j_engine_quartets_scheme(mol, l_ctr_pattern, shm_size=SHM_SIZE):
     ls = l_ctr_pattern[:,0]
     li, lj, lk, ll = ls
@@ -935,34 +999,13 @@ def _j_engine_quartets_scheme(mol, l_ctr_pattern, shm_size=SHM_SIZE):
     gout_stride = THREADS // n
     return n, gout_stride, with_gout
 
-def _nearest_power2(n, return_leq=True):
-    '''nearest 2**x that is leq or geq than n.
-
-    Kwargs:
-        return_leq specifies that the return is less or equal than n.
-        Otherwise, the return is greater or equal than n.
-    '''
-    if isinstance(n, np.ndarray):
-        n = n.astype(int, copy=False)
-        if return_leq:
-            return 2 ** np.log2(n).astype(int)
-        else:
-            return 2 ** np.ceil(np.log2(n)).astype(int)
-
-    n = int(n)
-    assert n > 0
-    if return_leq:
-        return 1 << (n.bit_length() - 1)
-    else:
-        return 1 << ((n-1).bit_length())
-
 def _cache_q_cond_and_non0pairs(mol, rys_envs, precision=1e-14, tile=4, tril=True):
     '''A fast routine to estimate the Schwarz inequality condition
     log(sqrt(absmax( (ij|ij) ))).
     Note the high angular momentum bases are excluded.
     '''
-    from gpu4pyscf.pbc.gto import int1e
     from gpu4pyscf.pbc.scf.rsjk import libpbc, _group_by_split_points
+    assert isinstance(mol, SortedMole)
     omega = mol.omega
     ls = np.arange(LMAX+1)
     li = ls[:,None]
@@ -997,7 +1040,7 @@ def _cache_q_cond_and_non0pairs(mol, rys_envs, precision=1e-14, tile=4, tril=Tru
     l_ctr_offsets = np.append(0, np.cumsum(mol.l_ctr_counts))
     n = mol.l_ctr_counts.max()
     pair_buf = cp.empty(n**2, dtype=np.int64)
-    ovlp_mask = int1e._shell_overlap_mask(mol, precision=precision**2)
+    ovlp_mask = mol.shell_overlap_mask(precision=precision**2)
     if tril:
         ovlp_mask = cp.tril(ovlp_mask)
     ovlp_mask = ovlp_mask.ravel()

@@ -1,4 +1,4 @@
-# Copyright 2021-2024 The PySCF Developers. All Rights Reserved.
+# Copyright 2021-2026 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,12 +20,17 @@
 dispersion correction for HF and DFT
 '''
 
+import warnings
 from functools import lru_cache
 from pyscf.lib import logger
 from pyscf import scf
+from pyscf import __config__
+
+DFTD4_RECOMMENDATIONS = getattr(__config__, 'DFTD4_RECOMMENDATIONS', False)
 
 # supported dispersion corrections
 DISP_VERSIONS = ['d3bj', 'd3zero', 'd3bjm', 'd3zerom', 'd3op', 'd4']
+# XC names for dftd3 and dftd4 inputs
 XC_MAP = {'wb97m-d3bj': 'wb97m',
           'b97m-d3bj': 'b97m',
           'wb97x-d3bj': 'wb97x',
@@ -46,6 +51,15 @@ _white_list = {
     'b97m-d3bj': ('b97m-v', False, 'd3bj'),
     'wb97x-d3bj': ('wb97x-v', False, 'd3bj'),
     'wb97x-3c': ('wb97x-v', False, 'd4:wb97x-3c'),
+    # CF22D is parameterized together with its D3 (zero-damping) dispersion
+    # correction, so it is enabled by default. The cf22d damping parameters
+    # are shipped with simple-dftd3 (>=1.2.1) under zero damping.
+    'cf22d': ('cf22d', '', 'd3zero'),
+    # COACH combines VV10 with an ATM-only D4 correction.
+    'coach': ('coach', '', 'd4:coach'),
+    'b97m-d4': ('b97m_v', False, 'd4:b97m'),
+    'wb97m-d4': ('wb97m_v', False, 'd4:wb97m'),
+    'wb97x-d4': ('wb97x_v', False, 'd4:wb97x'),
 }
 
 # These xc functionals are not supported yet
@@ -72,16 +86,46 @@ def parse_dft(xc_code):
     if method_lower in _black_list:
         raise NotImplementedError(f'{method_lower} is not supported yet.')
 
-    if method_lower in _white_list:
-        return _white_list[method_lower]
-
     if method_lower.endswith('-3c'):
         if method_lower == "wb97x-3c":
             return _white_list[method_lower]
         raise NotImplementedError('Only wb97x-3c is supported for now. Other 3c methods are not supported yet.')
 
-    if '-d3' in method_lower or '-d4' in method_lower:
-        xc, disp = method_lower.split('-')
+    if method_lower == 'wb97x-d4' and not DFTD4_RECOMMENDATIONS:
+        xc, nlc, disp = _white_list[method_lower]
+        warnings.warn('''
+You are seeing this warning because `wb97x-d4` may produce different results from other packages.
+PySCF currently evaluates the XC functional using `wb97x`, following the behavior of PySCF
+v2.13 and earlier releases. This differs from the DFT-D4 recommendation, which uses wb97x_v and
+replaces the VV10 part with the D4 dispersion correction.
+
+To use the DFT-D4 recommended convention, set
+
+mf.xc = 'wb97x_v'
+mf.nlc = False
+mf.disp = 'd4:wb97x'
+
+or enable it globally via
+
+DFTD4_RECOMMENDATIONS = True
+
+in ~/pyscf_conf.py`, or at runtime via
+
+pyscf.scf.dispersion.DFTD4_RECOMMENDATIONS = True
+
+The default behavior will change to the DFT-D4 recommended convention in PySCF v2.16.
+''', FutureWarning, stacklevel=2)
+        return 'wb97x', False, 'd4:wb97x-2008'
+
+    if method_lower in _white_list:
+        return _white_list[method_lower]
+
+    if '-d3' in method_lower:
+        xc, _, disp_suffix = method_lower.partition('-d3')
+        disp = f'd3{disp_suffix}'
+    elif '-d4' in method_lower:
+        xc, _, disp_suffix = method_lower.partition('-d4')
+        disp = f'd4{disp_suffix}'
     else:
         xc, disp = method_lower, None
 
@@ -120,11 +164,11 @@ def parse_disp(dft_method=None, disp=None):
         >>> parse_disp(None, 'd4:wb97x-3c')
         ('wb97x-3c', 'd4', True)
     '''
-        
+
     # If anything not specified, return None
     if dft_method is None and disp is None:
         return None, None, False
-    
+
     def process_3body(disp_version):
         if not disp_version:
             return disp_version, False
@@ -141,11 +185,11 @@ def parse_disp(dft_method=None, disp=None):
 
     if dft_method is not None:
         dft_lower = dft_method.lower()
-        xc, _, disp_from_dft = parse_dft(dft_lower)
+        xc, nlc, disp_from_dft = parse_dft(dft_lower)
         if xc in XC_MAP:
             xc = XC_MAP[xc]
 
-    # Use disp if specfied 
+    # Use disp if specified
     # returned method will be the latter part of disp if disp is a string with colon, otherwise, use xc
     if disp is not None:
         if ":" in disp:
@@ -157,16 +201,16 @@ def parse_disp(dft_method=None, disp=None):
             return xc, disp, with_3body
         else:
             raise ValueError(f"the method used in dispersion {disp} is not specified.")
-        
+
     # otherwise, use disp_from_dft
     if disp_from_dft is None:
         return None, None, False
-        
+
     if ":" in disp_from_dft:
         disp_version, method = disp_from_dft.split(':')
         disp_version, with_3body = process_3body(disp_version)
         return method, disp_version, with_3body
-    
+
     disp_from_dft, with_3body = process_3body(disp_from_dft)
     return xc, disp_from_dft, with_3body
 
@@ -180,20 +224,20 @@ def check_disp(mf, disp=None):
 
     Args:
         mf (scf.hf.SCF): The SCF object (HF or DFT).
-        disp (str or bool, optional): Dispersion version to check. 
+        disp (str or bool, optional): Dispersion version to check.
             If None, uses `mf.disp`.
             If False, returns False immediately.
 
     Returns:
-        bool: True if dispersion is enabled and supported. 
+        bool: True if dispersion is enabled and supported.
               False if dispersion is disabled (disp=False) or not specified/implied.
-    
+
     Raises:
         ValueError: If the dispersion version is not supported.
     '''
     if disp is None:
         disp = getattr(mf, 'disp', None)
-    if disp is False:
+    if disp is False or disp == 0:
         return False
 
     # To prevent mf.do_disp() triggering the SCF.__getattr__ method, do not use
@@ -211,6 +255,24 @@ def check_disp(mf, disp=None):
     if disp_version not in DISP_VERSIONS:
         raise ValueError(f"Unknown dispersion version {disp_version}.")
     return True
+
+def _make_d4_model(mol, method, with_3body):
+    '''Construct a D4 model with the same parameters for all derivatives.'''
+    from gpu4pyscf.dispersion import dftd4
+
+    if method.lower() == 'coach':
+        # D4_PARAMS in the COACH authors' reference implementation:
+        # https://github.com/JiashuLiang/COACH/blob/main/FunctionalCOACH/coach_pyscf.py
+        # Reference: J. Liang and M. Head-Gordon, "Reaching for the performance
+        # limit of hybrid density functional theory for molecular chemistry" (2026)
+        #
+        # Initialize with a known method, then replace all damping parameters.
+        model = dftd4.DFTD4Dispersion(mol, xc='hf', atm=with_3body)
+        model.set_param(s6=0.0, s8=0.0, s9=float(with_3body),
+                        a1=0.215, a2=5.8, alp=16.0)
+        return model
+    return dftd4.DFTD4Dispersion(mol, xc=method, atm=with_3body)
+
 
 def get_dispersion(mf, disp=None, with_3body=None, verbose=None):
     '''
@@ -233,7 +295,7 @@ def get_dispersion(mf, disp=None, with_3body=None, verbose=None):
             The dispersion correction energy.
 
     Note:
-        Priority of `disp` and `with_atm`:
+        Priority of `disp` and `with_3body`:
         1. Function arguments (disp, with_3body)
         2. mf.disp (if available)
         3. mf.xc (parsed from the functional name)
@@ -244,7 +306,7 @@ def get_dispersion(mf, disp=None, with_3body=None, verbose=None):
     if disp is None:
         disp = getattr(mf, 'disp', None)
 
-    from gpu4pyscf.dispersion import dftd3, dftd4
+    from gpu4pyscf.dispersion import dftd3
 
     dft_method = getattr(mf, 'xc', 'hf')
     method, disp_version, disp_with_3body = parse_disp(dft_method, disp)
@@ -267,7 +329,7 @@ def get_dispersion(mf, disp=None, with_3body=None, verbose=None):
     elif disp_version[:2].upper() == 'D4':
         logger.info(mf, "Calc dispersion correction with DFTD4.")
         logger.info(mf, f"Parameters: xc={method}, atm={with_3body}")
-        d4_model = dftd4.DFTD4Dispersion(mol, xc=method, atm=with_3body)
+        d4_model = _make_d4_model(mol, method, with_3body)
         res = d4_model.get_dispersion()
         e_d4 = res.get('energy')
         mf.scf_summary['dispersion'] = e_d4

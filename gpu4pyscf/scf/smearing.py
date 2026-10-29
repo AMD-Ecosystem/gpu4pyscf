@@ -18,7 +18,7 @@ import scipy
 from pyscf import __config__, lib
 from pyscf.scf import addons as cpu_addons
 from pyscf.scf.addons import (_fermi_smearing_occ, _gaussian_smearing_occ,
-                              _get_fermi, _smearing_optimize)
+                              _get_fermi)
 from pyscf.pbc.tools import print_mo_energy_occ
 from gpu4pyscf.lib import logger
 
@@ -54,6 +54,38 @@ def smearing_(mf, *args, **kwargs):
     mf.__dict__ = mf1.__dict__
     return mf
 
+
+def _smearing_optimize(f_occ, mo_es, nocc, sigma):
+    def rootfn(m):
+        mo_occ = f_occ(m, mo_es, sigma)
+        return mo_occ.sum() - nocc
+
+    # it's okay to set small xtol according to the docs.
+    mu = scipy.optimize.bisect(rootfn, mo_es.min()-10., mo_es.max()+10.,
+                               xtol=1e-16, maxiter=10000)
+
+    cur_err = abs(rootfn(mu))
+
+    # Check if we can further improve mu by moving it up/down
+    # by the minimum machine-representable amount.
+    # In many cases with Fermi-type smearing and sigma~1e-6,
+    # the minimum possible error is still >1e-11 because the
+    # smearing function is just so sharp. Because xtol is set to 1e-16 above,
+    # this should not take too many iterations.
+
+    iters, maxiter = 0, 1000
+
+    while abs(rootfn(np.nextafter(mu, np.inf))) < cur_err and iters < maxiter:
+        mu = np.nextafter(mu, np.inf)
+        cur_err = abs(rootfn(mu))
+        iters += 1
+
+    while abs(rootfn(np.nextafter(mu, -np.inf))) < cur_err and iters < maxiter:
+        mu = np.nextafter(mu, -np.inf)
+        cur_err = abs(rootfn(mu))
+        iters += 1
+
+    return mu, f_occ(mu, mo_es, sigma)
 
 class _SmearingSCF:
 
@@ -105,6 +137,9 @@ class _SmearingSCF:
         else:
             f_occ = _gaussian_smearing_occ
 
+        # Intentional GPU->CPU transfer: smearing routines (_fermi_smearing_occ,
+        # _gaussian_smearing_occ, _smearing_optimize) are PySCF CPU-only numpy
+        # implementations. mo_occs is uploaded back to GPU at the end of this method.
         mo_energy = mo_energy.get()
         if self.fix_spin and is_uhf:  # spin separated fermi level
             mo_es = mo_energy
@@ -112,9 +147,6 @@ class _SmearingSCF:
             if self.mu0 is None:
                 mu_a, occa = _smearing_optimize(f_occ, mo_es[0], nocc[0], sigma)
                 mu_b, occb = _smearing_optimize(f_occ, mo_es[1], nocc[1], sigma)
-                # Different version of pyscf/numpy combination can return list or number
-                mu_a = float(mu_a if not hasattr(mu_a, '__iter__') else mu_a[0])
-                mu_b = float(mu_b if not hasattr(mu_b, '__iter__') else mu_b[0])
             else:
                 if np.isscalar(self.mu0):
                     mu_a = mu_b = self.mu0
@@ -168,8 +200,6 @@ class _SmearingSCF:
 
             if self.mu0 is None:
                 mu, mo_occs = _smearing_optimize(f_occ, mo_es, nelectron, sigma)
-                # Different version of pyscf/numpy combination can return list or number
-                mu = float(mu if not hasattr(mu, '__iter__') else mu[0])
             else:
                 # If mu0 is given, fix mu instead of electron number. XXX -Chong Sun
                 mu = self.mu0
@@ -200,7 +230,7 @@ class _SmearingSCF:
                 mo_occs = mo_occs.reshape(2, -1)
             if self.verbose >= logger.DEBUG:
                 print_mo_energy_occ(self, mo_energy, mo_occs, is_uhf)
-        return cp.asarray(mo_occs)
+        return cp.asarray(mo_occs)  # CPU->GPU: upload smearing-computed occupancies
 
     _get_entropy = cpu_addons._SmearingSCF._get_entropy
 

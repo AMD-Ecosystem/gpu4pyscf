@@ -86,6 +86,16 @@ def tearDownModule():
     del mol, mol1
 
 class KnownValues(unittest.TestCase):
+    def test_get_occ_zero_beta_electrons(self):
+        mol_h = pyscf.M(atom='H 0 0 0', basis='6-31g', spin=1)
+        mf = scf.UHF(mol_h)
+        mf.verbose = pyscf.lib.logger.INFO
+        mo_energy = cupy.asarray([[-0.5, 0.2], [-0.4, 0.3]])
+
+        mo_occ = mf.get_occ(mo_energy)
+
+        self.assertTrue(cupy.array_equal(mo_occ, cupy.asarray([[1, 0], [0, 0]])))
+
     def test_get_jk(self):
         np.random.seed(1)
         nao = mol.nao
@@ -306,8 +316,8 @@ class KnownValues(unittest.TestCase):
         mf_copy = scf.UHF(mol).density_fit()
         mf_copy.chkfile = ftmp.name
         dma_loaded, dmb_loaded = mf_copy.init_guess_by_chkfile()
-        assert np.allclose(dma_stored, dma_loaded, atol = 1e-14) # Since we reload the MO coefficients, the density matrix should be identical up to numerical noise.
-        assert np.allclose(dmb_stored, dmb_loaded, atol = 1e-14)
+        assert cupy.allclose(dma_stored, dma_loaded, atol = 1e-14) # Since we reload the MO coefficients, the density matrix should be identical up to numerical noise.
+        assert cupy.allclose(dmb_stored, dmb_loaded, atol = 1e-14)
 
     def test_initial_guess_tag(self):
         mf = mol.UHF().to_gpu()
