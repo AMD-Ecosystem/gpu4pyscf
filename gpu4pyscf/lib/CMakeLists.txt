@@ -58,10 +58,10 @@ if(USE_HIP)
   # (AMD clang 24): on gfx90a and gfx942 machine LICM clobbers the register
   # holding the atomicAdd offset at the top of the persistent loop in the Rys J/K
   # kernels, and every basis with d shells then crashes with a memory access
-  # fault. With ROCm 7.2.1 those tests pass without it. With -fgpu-rdc the
-  # device code is generated at link time, which picks the flag up from
-  # CMAKE_HIP_FLAGS as described above. Remove it once a ROCm release passes
-  # the d-shell SCF tests without it.
+  # fault. With ROCm 7.2.1 the d-shell SCF tests pass on gfx90a without it.
+  # With -fgpu-rdc the device code is generated at link time, which picks the
+  # flag up from CMAKE_HIP_FLAGS as described above. Remove it once a ROCm
+  # release passes the d-shell SCF tests on gfx90a and gfx942 without it.
   string(APPEND CMAKE_HIP_FLAGS " -mllvm -disable-machine-licm")
   # Resolve `#include <cuda_runtime.h>` in the kernel sources to the compat shim.
   include_directories(BEFORE ${PROJECT_SOURCE_DIR}/hip_compat)
