@@ -62,7 +62,7 @@ If CMake does not find the HIP compiler, add `-DCMAKE_HIP_COMPILER=<rocm_path>/l
 ```sh
 pip3 install cupy-rocm-7-0
 ```
-The CMake configuration adds `-mllvm -disable-machine-licm` to the HIP build because the ROCm compiler's machine LICM pass miscompiles the Rys J/K kernels on gfx90a and gfx942, crashing every basis with d shells; do not remove it unless the d-shell SCF tests pass without it.
+The CMake configuration adds `-mllvm -disable-machine-licm` to the HIP build because the machine LICM pass of the ROCm 10.1 compiler (AMD clang 24) miscompiles the Rys J/K kernels on gfx90a and gfx942, crashing every basis with d shells. With ROCm 7.2.1 those tests pass without the flag. It can be removed once a ROCm release passes the d-shell SCF tests without it.
 
 cuTENSOR is not available on ROCm, so the warning above is expected there. The ROCm build covers Hartree-Fock and the integral libraries. DFT (libxc), solvent models, semi-empirical methods and multigrid are not built for ROCm.
 

@@ -46,21 +46,23 @@ if(USE_HIP)
   # them across objects, so force default visibility for the device link.
   # -fgpu-rdc: the integral libraries split device code across translation units
   # (the CUDA build uses CUDA_SEPARABLE_COMPILATION). CMake's HIP_SEPARABLE_COMPILATION
-  # does not inject the relocatable-device-code flag, so set it explicitly here and
-  # add --hip-link -fgpu-rdc on the shared-library link below.
+  # does not inject the relocatable-device-code flag, so set it explicitly here.
+  # CMake's HIP link rule repeats CMAKE_HIP_FLAGS and adds --hip-link itself, so
+  # the flags here also reach the shared-library link, where the device code is
+  # generated.
   # -Wno-register: a few unrolled kernels still use the (C++17-removed) register
   # keyword; nvcc tolerates it, clang-HIP rejects it, so downgrade to a warning.
   string(APPEND CMAKE_HIP_FLAGS
     " -DUSE_HIP -include ${PROJECT_SOURCE_DIR}/cuda_to_hip.h -ffp-contract=on -fvisibility=default -fgpu-rdc -Wno-register")
-  string(APPEND CMAKE_SHARED_LINKER_FLAGS " -fgpu-rdc --hip-link")
-  # -mllvm -disable-machine-licm works around a ROCm compiler bug: on gfx90a and
-  # gfx942 machine LICM clobbers the register holding the atomicAdd offset at the
-  # top of the persistent loop in the Rys J/K kernels, and every basis with d
-  # shells then crashes with a memory access fault. With -fgpu-rdc device code
-  # is generated at link time, so the flag is needed on both lines. Remove it
-  # only once a later ROCm compiler passes the d-shell SCF tests without it.
+  # -mllvm -disable-machine-licm works around a compiler bug seen with ROCm 10.1
+  # (AMD clang 24): on gfx90a and gfx942 machine LICM clobbers the register
+  # holding the atomicAdd offset at the top of the persistent loop in the Rys J/K
+  # kernels, and every basis with d shells then crashes with a memory access
+  # fault. With ROCm 7.2.1 those tests pass without it. With -fgpu-rdc the
+  # device code is generated at link time, which picks the flag up from
+  # CMAKE_HIP_FLAGS as described above. Remove it once a ROCm release passes
+  # the d-shell SCF tests without it.
   string(APPEND CMAKE_HIP_FLAGS " -mllvm -disable-machine-licm")
-  string(APPEND CMAKE_SHARED_LINKER_FLAGS " -mllvm -disable-machine-licm")
   # Resolve `#include <cuda_runtime.h>` in the kernel sources to the compat shim.
   include_directories(BEFORE ${PROJECT_SOURCE_DIR}/hip_compat)
 endif()
