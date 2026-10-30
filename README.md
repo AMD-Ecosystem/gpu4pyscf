@@ -53,6 +53,17 @@ There shouldn't be cupy or cutensor compilation during pip install process. If y
 <repo_path>/gpu4pyscf/lib/cutensor.py:<line_number>: UserWarning: using cupy as the tensor contraction engine.
 ```
 
+To compile for AMD GPUs with ROCm on Linux, enable `USE_HIP` and set the GPU architecture (for example `gfx90a`, `gfx942` or `gfx1100`):
+```sh
+cmake -S gpu4pyscf/lib -B build/temp.gpu4pyscf -DUSE_HIP=ON -DCMAKE_HIP_ARCHITECTURES=gfx942
+cmake --build build/temp.gpu4pyscf -j 4
+```
+If CMake does not find the HIP compiler, add `-DCMAKE_HIP_COMPILER=<rocm_path>/llvm/bin/clang++`. Set `PYTHONPATH` as above, then install CuPy for ROCm instead of the CUDA packages:
+```sh
+pip3 install cupy-rocm-7-0
+```
+cuTENSOR is not available on ROCm, so the warning above is expected there. The ROCm build covers Hartree-Fock and the integral libraries. DFT (libxc), solvent models, semi-empirical methods and multigrid are not built for ROCm.
+
 Features
 --------
 
