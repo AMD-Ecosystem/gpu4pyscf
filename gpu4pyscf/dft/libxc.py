@@ -32,7 +32,15 @@ is_nlc           = libxc_cpu.is_nlc
 is_hybrid_xc     = libxc_cpu.is_hybrid_xc
 test_deriv_order = libxc_cpu.test_deriv_order
 
-_libxc = load_library('libxc', path='gpu4pyscf/lib/deps/lib')
+if cupy.cuda.runtime.is_hip:
+    # No GPU libxc build exists for ROCm. The HF modules import this one, so
+    # a missing library must not fail the import.
+    try:
+        _libxc = load_library('libxc', path='gpu4pyscf/lib/deps/lib')
+    except OSError:
+        _libxc = None
+else:
+    _libxc = load_library('libxc', path='gpu4pyscf/lib/deps/lib')
 
 libgdft = load_library('libgdft')
 libgdft.GDFT_xc_lda.argtypes = (
@@ -63,15 +71,18 @@ libgdft.GDFT_xc_mgga.argtypes = (
     POINTER(xc_mgga_out_params),
     POINTER(xc_mgga_out_params))
 
-_libxc.xc_version_string.restype = ctypes.c_char_p
-_libxc_version = _libxc.xc_version_string().decode()
-__version__ = _libxc_version + ' (CUDA)'
-# The packaged 7.0.0 fork inserts params_size before the four thresholds.
-# Select the layout before binding xc_func_alloc and the other C functions.
-if _libxc_version == '7.0.0':
-    xc_func_type = libxc_structs.xc_func_type_700
+if _libxc is not None:
+    _libxc.xc_version_string.restype = ctypes.c_char_p
+    _libxc_version = _libxc.xc_version_string().decode()
+    __version__ = _libxc_version + ' (CUDA)'
+    # The packaged 7.0.0 fork inserts params_size before the four thresholds.
+    # Select the layout before binding xc_func_alloc and the other C functions.
+    if _libxc_version == '7.0.0':
+        xc_func_type = libxc_structs.xc_func_type_700
+    else:
+        xc_func_type = libxc_structs.xc_func_type
 else:
-    xc_func_type = libxc_structs.xc_func_type
+    __version__ = 'unavailable (libxc not installed)'
 
 LDA_OUTPUT_LABELS = [
                 "zk",       # 1, 1

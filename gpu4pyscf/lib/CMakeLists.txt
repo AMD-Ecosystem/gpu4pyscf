@@ -36,8 +36,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(USE_HIP)
-  # Force-include the compat shim on every HIP TU so the cuda* spellings and
-  # the wave64 subgroup-reduction fix are defined before any source is parsed.
+  # Force-include the compat shim on every HIP TU so the cuda* spellings are
+  # defined before any source is parsed.
   # Pin fp-contract so the J/K fingerprints match the CPU PySCF reference to
   # the test's 7 d.p. bar (clang-HIP defaults to -ffp-contract=fast).
   # -fvisibility=default: the integral kernels share `extern __device__` Rys-root
@@ -182,30 +182,28 @@ endif()
 
 add_subdirectory(gint)
 add_subdirectory(gvhf)
-add_subdirectory(cupy_helper)
-add_subdirectory(gvhf-rys)
-add_subdirectory(gvhf-md)
-# The molecular HF hcore and the scf/jk.py Schwarz-condition cache go through
-# the pbc 1e-integral kernels (libpbc), and the import chain reaches
-# gpu4pyscf.dft.libxc (libgdft), so even plain RHF get_jk needs libgecp, libgdft
-# and libpbc in addition to the J/K engine libraries. All three build under HIP.
-add_subdirectory(ecp)
+# The molecular HF path needs libgdft, libpbc and libgecp besides the J/K
+# libraries: hcore and the J/K Schwarz cache use the pbc 1e-integral kernels,
+# and its imports reach gpu4pyscf.dft.libxc. sem, solvent and multigrid are not
+# built for ROCm.
 add_subdirectory(gdft)
-add_subdirectory(pbc)
-
-# The ROCm build covers the integral / HF (J/K) libraries plus libgecp, libgdft
-# and libpbc. The CUTLASS grouped GEMM in cupy_helper, the external libxc
-# functional library, solvent, sem and multigrid are not built for ROCm yet.
+add_subdirectory(cupy_helper)
 if(NOT USE_HIP)
   add_subdirectory(sem)
+endif()
 
-  option(BUILD_SOLVENT "Using SMD solvent" ON)
-  if(BUILD_SOLVENT)
-    add_subdirectory(solvent)
-  endif()
+option(BUILD_SOLVENT "Using SMD solvent" ON)
+if(BUILD_SOLVENT AND NOT USE_HIP)
+  add_subdirectory(solvent)
+endif()
 
+add_subdirectory(gvhf-rys)
+add_subdirectory(gvhf-md)
+add_subdirectory(pbc)
+if(NOT USE_HIP)
   add_subdirectory(multigrid)
 endif()
+add_subdirectory(ecp)
 
 if(USE_HIP)
   option(BUILD_LIBXC "Using libxc for DFT" OFF)

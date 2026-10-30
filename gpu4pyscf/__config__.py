@@ -34,7 +34,7 @@ cupy.get_default_memory_pool().set_limit(fraction=mem_fraction)
 
 # sharedMemPerBlockOptin is a CUDA-only device attribute; CuPy-ROCm does not
 # expose it. Fall back to sharedMemPerBlock (the per-block LDS limit, 64 KB on
-# gfx90a) when it is absent so the opt-in branch is skipped on ROCm. On CUDA
+# AMD GPUs) when it is absent so the opt-in branch is skipped on ROCm. On CUDA
 # the key is present and behaviour is unchanged.
 if props.get('sharedMemPerBlockOptin', 0) > 65536:
     shm_size = props['sharedMemPerBlockOptin']
@@ -42,6 +42,10 @@ if props.get('sharedMemPerBlockOptin', 0) > 65536:
     shm_size -= 2048
 else:
     shm_size = props['sharedMemPerBlock']
+    if cupy.cuda.runtime.is_hip:
+        # The kernels' static __shared__ variables count against the same
+        # 64 KB as the dynamic buffer sized from shm_size.
+        shm_size -= 1024
 
 # Check P2P data transfer is available
 _p2p_access = True

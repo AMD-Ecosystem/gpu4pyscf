@@ -12,14 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# On ROCm the molecular HF path imports gpu4pyscf.pbc only to reach the
-# 1e-integral kernels in pbc.gto.int1e (libpbc). The periodic pbc.scf, pbc.dft
-# and pbc.properties stacks need libmgrid (multigrid) and the GPU XC functional
-# library, which the ROCm build does not provide yet, so they are not imported
-# eagerly there. On CUDA all subpackages import as before.
 import cupy as _cupy
-if not getattr(_cupy.cuda.runtime, 'is_hip', False):
-    from gpu4pyscf.pbc import scf
+from gpu4pyscf.pbc import scf
+# The periodic DFT stack needs libmgrid and the GPU XC functional library,
+# which are not built for ROCm.
+if not _cupy.cuda.runtime.is_hip:
     from gpu4pyscf.pbc import dft
-    from gpu4pyscf.pbc import properties
+from gpu4pyscf.pbc import properties
 del _cupy

@@ -100,7 +100,11 @@ void md_j_1dm_kernel(RysIntEnvVars envs, JKMatrix jk, MDBoundsInfo bounds,
     int t_id = gout_id * nsq_per_block + sq_id;
     int lane_id = t_id % warpSize;
     int group_id = lane_id / threadsx;
+#ifdef USE_HIP
+    unsigned long long mask = ((1ull << threadsx) - 1) << (group_id * threadsx);
+#else
     unsigned int mask = ((1 << threadsx) - 1) << group_id * threadsx;
+#endif
     int tx = sq_id % threadsx;
     int ty = sq_id / threadsx;
     int threads = nsq_per_block * gout_stride;
@@ -430,7 +434,11 @@ void md_j_4dm_kernel(RysIntEnvVars envs, JKMatrix jk, MDBoundsInfo bounds,
     int t_id = gout_id * nsq_per_block + sq_id;
     int lane_id = t_id % warpSize;
     int group_id = lane_id / threadsx;
+#ifdef USE_HIP
+    unsigned long long mask = ((1ull << threadsx) - 1) << (group_id * threadsx);
+#else
     unsigned int mask = ((1 << threadsx) - 1) << group_id * threadsx;
+#endif
     int tx = sq_id % threadsx;
     int ty = sq_id / threadsx;
     int threads = nsq_per_block * gout_stride;
