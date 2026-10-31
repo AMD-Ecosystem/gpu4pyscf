@@ -6,6 +6,14 @@
 #include "gvhf-rys/create_tasks.cu"
 #include "gvhf-rys/unrolled_kernels.cuh"
 
+#ifdef USE_HIP
+// The kernels below hard-code nsq_per_block, so the launch must keep it.
+// Doubling the block for a kernel that uses <= 128 registers (common on
+// AMD GPUs) would run every task twice and overlap the shared memory slices.
+#undef adjust_threads
+#define adjust_threads(kernel, threads)
+#endif
+
 
 __global__ static
 void rys_ejk_ip2_type12_0000(JKENERGY_KERNEL_ARGS)
