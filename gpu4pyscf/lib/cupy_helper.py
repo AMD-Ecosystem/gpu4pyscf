@@ -51,8 +51,22 @@ def pin_memory(array):
     ret[...] = array
     return ret
 
+@functools.lru_cache
+def _hip_device_set_limit():
+    # libamdhip64 is already loaded by CuPy; its soname carries the HIP major
+    # version reported by the runtime.
+    major = cupy.cuda.runtime.runtimeGetVersion() // 10000000
+    fn = ctypes.CDLL(f'libamdhip64.so.{major}').hipDeviceSetLimit
+    fn.argtypes = (ctypes.c_int, ctypes.c_size_t)
+    return fn
+
 def release_gpu_stack():
-    cupy.cuda.runtime.deviceSetLimit(0x00, 128)
+    if cupy.cuda.runtime.is_hip:
+        # CuPy's ROCm backend stubs deviceSetLimit to return hipErrorUnknown
+        # (cupy_backends/hip/cupy_hip_runtime.h), so call HIP directly.
+        cupy.cuda.runtime.check_status(_hip_device_set_limit()(0x00, 128))
+    else:
+        cupy.cuda.runtime.deviceSetLimit(0x00, 128)
 
 def print_mem_info():
     mempool = cupy.get_default_memory_pool()
