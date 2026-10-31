@@ -73,6 +73,7 @@ hipError_t _g4p_host_get_device_pointer(T **dev, void *host, unsigned int flags)
 #define cudaDeviceSynchronize   hipDeviceSynchronize
 
 #define cudaGetLastError        hipGetLastError
+#define cudaPeekAtLastError     hipPeekAtLastError
 #define cudaGetErrorString      hipGetErrorString
 #define cudaGetErrorName        hipGetErrorName
 
@@ -111,7 +112,8 @@ hipError_t _g4p_func_set_attribute(F func, hipFuncAttribute attr, int value)
 
 /*
  * The wave64 subgroup-reduction fix lives in cuda_to_hip_shfl.h, force-included
- * only on the gvhf-md J-engine translation units (see gvhf-md/CMakeLists.txt).
+ * only on the gvhf-md J-engine and multigrid_v3 translation units (see
+ * gvhf-md/CMakeLists.txt and multigrid/CMakeLists.txt).
  * It is intentionally NOT defined here: this header is force-included on every
  * HIP TU, and a global __shfl_down_sync macro collides with HIP's own
  * mask-aware __shfl_down_sync overloads pulled in by hipCUB / the bf16 headers

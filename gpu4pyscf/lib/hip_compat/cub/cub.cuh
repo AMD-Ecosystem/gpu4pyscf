@@ -20,6 +20,11 @@
  * primitives over rocPRIM, so resolve the CUB include to hipCUB and alias the
  * cub namespace. Only the block primitives the kernels touch are exercised.
  */
+// <complex.h> (included ahead of this header by multigrid_v2/screen.cu)
+// defines the macro I, which rocPRIM uses as a template parameter name.
+#ifdef I
+#undef I
+#endif
 #include <hipcub/hipcub.hpp>
 
 namespace cub = hipcub;

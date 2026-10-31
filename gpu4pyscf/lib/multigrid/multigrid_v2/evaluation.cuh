@@ -348,7 +348,11 @@ __global__ static void evaluate_density_kernel(
             // built-in). Stride starts at warpSize/2 and halves.
 #pragma unroll
             for (int _o = warpSize / 2; _o > 0; _o >>= 1)
+#ifdef USE_HIP
+              _wv += __shfl_down(_wv, _o);
+#else
               _wv += __shfl_down_sync(0xffffffffu, _wv, _o);
+#endif
             // Warp leader test + warp-index extraction using warpSize.
             if ((thread_id % warpSize) == 0) {  /*L2: warp-private store, no atomic*/
               reduced_density_values[(i_channel * n_warps + (thread_id / warpSize)) *

@@ -20,7 +20,7 @@ cmake_minimum_required (VERSION 3.21 FATAL_ERROR) # Required by Libxc 7.1.2
 # to HIP so the kernel sources stay in CUDA form. The CUDA build is unchanged.
 option(USE_HIP "Build the CUDA kernel libraries for ROCm/HIP" OFF)
 if(USE_HIP)
-  project (gpu4pyscf C CXX HIP)
+  project (gpu4pyscf C CXX HIP Fortran)
   if(DEFINED CMAKE_HIP_ARCHITECTURES)
     # honour the cache value (e.g. gfx90a / gfx1100 / gfx1151)
   elseif(DEFINED ENV{HIP_ARCHITECTURES})
@@ -192,27 +192,19 @@ endif()
 
 add_subdirectory(gint)
 add_subdirectory(gvhf)
-# The molecular HF path needs libgdft, libpbc and libgecp besides the J/K
-# libraries: hcore and the J/K Schwarz cache use the pbc 1e-integral kernels,
-# and its imports reach gpu4pyscf.dft.libxc. sem, solvent and multigrid are not
-# built for ROCm.
 add_subdirectory(gdft)
 add_subdirectory(cupy_helper)
-if(NOT USE_HIP)
-  add_subdirectory(sem)
-endif()
+add_subdirectory(sem)
 
 option(BUILD_SOLVENT "Using SMD solvent" ON)
-if(BUILD_SOLVENT AND NOT USE_HIP)
+if(BUILD_SOLVENT)
   add_subdirectory(solvent)
 endif()
 
 add_subdirectory(gvhf-rys)
 add_subdirectory(gvhf-md)
 add_subdirectory(pbc)
-if(NOT USE_HIP)
-  add_subdirectory(multigrid)
-endif()
+add_subdirectory(multigrid)
 add_subdirectory(ecp)
 
 option(BUILD_LIBXC "Using libxc for DFT" ON)

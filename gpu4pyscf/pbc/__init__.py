@@ -12,11 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import cupy as _cupy
 from gpu4pyscf.pbc import scf
-# The periodic DFT stack needs libmgrid and the GPU XC functional library,
-# which are not built for ROCm.
-if not _cupy.cuda.runtime.is_hip:
-    from gpu4pyscf.pbc import dft
+from gpu4pyscf.pbc import dft
 from gpu4pyscf.pbc import properties
-del _cupy

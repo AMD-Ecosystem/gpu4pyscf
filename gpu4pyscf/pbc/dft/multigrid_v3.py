@@ -44,7 +44,7 @@ from pyscf.pbc.tools.k2gamma import translation_vectors_for_kmesh
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.cupy_helper import (
     contract, transpose_sum, ndarray, asarray, tag_array, load_library, absmax,
-    get_avail_mem, vec_dot)
+    get_avail_mem, vec_dot, kernel_source)
 from gpu4pyscf.lib.utils import nearest_power2
 from gpu4pyscf.__config__ import props as gpu_specs
 from gpu4pyscf.lib import multi_gpu
@@ -1029,7 +1029,7 @@ void ''' + fn_name + r'''(cuDoubleComplex* __restrict__ out, cuDoubleComplex *rh
         out[g] = make_cuDoubleComplex(-Gv * cuCimag(rho), Gv * cuCreal(rho));
     }
 }''')
-        _kernel_registery[fn_name] = cp.RawKernel(kernel_code, fn_name)
+        _kernel_registery[fn_name] = cp.RawKernel(kernel_source(kernel_code), fn_name)
 
     kernel = _kernel_registery[fn_name]
     out = ndarray(rhoG.shape, buffer=out, dtype=np.complex128)
@@ -1064,7 +1064,7 @@ void ''' + fn_name + r'''(cuDoubleComplex* __restrict__ out, cuDoubleComplex *vx
         out[g] = res;
     }
 }''')
-        _kernel_registery[fn_name] = cp.RawKernel(kernel_code, fn_name)
+        _kernel_registery[fn_name] = cp.RawKernel(kernel_source(kernel_code), fn_name)
 
     kernel = _kernel_registery[fn_name]
     workers = gpu_specs['multiProcessorCount']
@@ -1132,7 +1132,7 @@ void ''' + fn_name + r'''(double *energy, double2* __restrict__ rhoG,
     }
     if (tid == 0) atomicAdd(energy, Ecoul);
 }''')
-        _kernel_registery[fn_name] = cp.RawKernel(kernel_code, fn_name)
+        _kernel_registery[fn_name] = cp.RawKernel(kernel_source(kernel_code), fn_name)
 
     kernel = _kernel_registery[fn_name]
     nx, ny, nz = [x.shape[1] for x in Gv_bases]
@@ -1203,7 +1203,7 @@ int nx, int ny, int nz)
         if (tid == 0) atomicAdd(out+n, sigma[n]);
     }
 }'''
-        _kernel_registery[fn_name] = cp.RawKernel(kernel_code, fn_name)
+        _kernel_registery[fn_name] = cp.RawKernel(kernel_source(kernel_code), fn_name)
     kernel = _kernel_registery[fn_name]
 
     nx, ny, nz = [x.shape[1] for x in Gv_bases]
@@ -1345,7 +1345,7 @@ double cexp0, double cexp1, double cexp2, double cexp3)
         for (int n = 0; n < 9; n++) atomicAdd(strain+n, sigma[n]);
     }
 }'''
-        _kernel_registery[fn_name] = cp.RawKernel(kernel_code, fn_name)
+        _kernel_registery[fn_name] = cp.RawKernel(kernel_source(kernel_code), fn_name)
     kernel = _kernel_registery[fn_name]
     workers = gpu_specs['multiProcessorCount']
 
@@ -1458,7 +1458,7 @@ int nx, int ny, int nz, int natm)
         for (int n = 0; n < 9; n++) atomicAdd(strain+n, sigma[n]);
     }
 }'''
-        _kernel_registery[fn_name] = cp.RawKernel(kernel_code, fn_name)
+        _kernel_registery[fn_name] = cp.RawKernel(kernel_source(kernel_code), fn_name)
     kernel = _kernel_registery[fn_name]
 
     nx, ny, nz = [x.shape[1] for x in Gv_bases]

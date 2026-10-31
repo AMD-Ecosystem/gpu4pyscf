@@ -40,6 +40,26 @@ SCIPY_EIGH_FOR_LARGE_ARRAYS = True
 
 _kernel_registery = {}
 
+# Definitions that let the RawKernel sources written for CUDA compile with
+# hiprtc. hiprtc has no cuComplex.h, and HIP's __shfl_down_sync takes a 64-bit
+# lane mask. The kernels reduce over 32-lane groups (lane = tid % 32) with the
+# 32-bit full mask; the 32-lane width keeps each reduction inside its group on
+# wave64 as well.
+_HIP_KERNEL_PREAMBLE = r'''
+#include <hip/hip_complex.h>
+typedef hipDoubleComplex cuDoubleComplex;
+#define make_cuDoubleComplex make_hipDoubleComplex
+#define cuCreal hipCreal
+#define cuCimag hipCimag
+#define __shfl_down_sync(mask, var, delta) __shfl_down(var, delta, 32)
+'''
+
+def kernel_source(code):
+    '''Adapt a CUDA RawKernel source for hiprtc when running on ROCm'''
+    if cupy.cuda.runtime.is_hip:
+        code = _HIP_KERNEL_PREAMBLE + code.replace('#include <cuComplex.h>', '')
+    return code
+
 libcupy_helper = load_library('libcupy_helper')
 
 pinned_memory_pool = cupy.cuda.PinnedMemoryPool()
@@ -986,6 +1006,14 @@ def grouped_dot(As, Bs, Cs=None):
     assert len(As) == len(Bs)
     assert As[0].flags.c_contiguous
     assert Bs[0].flags.c_contiguous
+    if cupy.cuda.runtime.is_hip:
+        # CUTLASS, which the grouped kernel is built on, has no ROCm port.
+        # Issue one GEMM per group instead.
+        if Cs is None:
+            return [a.dot(b.T) for a, b in zip(As, Bs)]
+        for a, b, c in zip(As, Bs, Cs):
+            cupy.dot(a, b.T, out=c)
+        return Cs
     groups = len(As)
     Ms, Ns, Ks = [], [], []
     for a, b in zip(As, Bs):
@@ -1054,6 +1082,14 @@ def grouped_gemm(As, Bs, Cs=None):
     assert len(As) == len(Bs)
     assert As[0].flags.c_contiguous
     assert Bs[0].flags.c_contiguous
+    if cupy.cuda.runtime.is_hip:
+        # CUTLASS, which the grouped kernel is built on, has no ROCm port.
+        # Issue one GEMM per group instead.
+        if Cs is None:
+            return [a.T.dot(b) for a, b in zip(As, Bs)]
+        for a, b, c in zip(As, Bs, Cs):
+            cupy.dot(a.T, b, out=c)
+        return Cs
     groups = len(As)
     Ms, Ns, Ks = [], [], []
     for a, b in zip(As, Bs):
@@ -1289,7 +1325,7 @@ void ''' + fn_name + r'''(double *out, double *vec1, double *vec2, long long n) 
     int lane = tid % 32;
     if (lane == 0) atomicAdd(out, sum);
 }''')
-        _kernel_registery[fn_name] = cupy.RawKernel(kernel_code, fn_name)
+        _kernel_registery[fn_name] = cupy.RawKernel(kernel_source(kernel_code), fn_name)
 
     kernel = _kernel_registery[fn_name]
     out = cupy.zeros(1)

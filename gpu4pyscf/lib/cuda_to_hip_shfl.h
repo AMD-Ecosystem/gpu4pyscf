@@ -16,8 +16,9 @@
 
 /*
  * wave64 subgroup-reduction fix for the gvhf-md J-engine (the central
- * correctness change of the ROCm/HIP port). Force-included ONLY on the
- * gvhf-md translation units that keep the CUDA __shfl_down_sync spelling;
+ * correctness change of the ROCm/HIP port) and the multigrid_v3 kernels.
+ * Force-included ONLY on the gvhf-md and multigrid_v3 translation units that
+ * keep the CUDA __shfl_down_sync spelling;
  * it is deliberately not in the global compat header because a global
  * __shfl_down_sync macro collides with HIP's own mask-aware overloads that
  * hipCUB / the bf16 headers (used elsewhere, e.g. the pbc int3c2e kernels)

@@ -24,7 +24,8 @@ import cupy as cp
 from pyscf import lib
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.cupy_helper import (
-    contract, asarray, ndarray, transpose_sum, get_avail_mem, empty_aligned)
+    contract, asarray, ndarray, transpose_sum, get_avail_mem, empty_aligned,
+    kernel_source)
 from gpu4pyscf.gto.mole import RysIntEnvVars, _scale_sp_ctr_coeff
 from gpu4pyscf.df.int3c2e_bdiv import _split_l_ctr_pattern, get_ao_pair_loc
 from gpu4pyscf.df.grad.rhf import factorize_dm
@@ -910,7 +911,7 @@ def indexed_scale(a, idx, b):
     '''a[idx] *= b'''
     fn_name = 'indexed_scale'
     if fn_name not in _kernel_registery:
-        _kernel_registery[fn_name] = cp.RawKernel(r'''
+        _kernel_registery[fn_name] = cp.RawKernel(kernel_source(r'''
 #include <cuComplex.h>
 extern "C" __global__
 void ''' + fn_name + r'''(cuDoubleComplex *a, int *idx, double *b, int ncol) {
@@ -924,7 +925,7 @@ void ''' + fn_name + r'''(cuDoubleComplex *a, int *idx, double *b, int ncol) {
         val.y *= w;
         a[off + j] = val;
     }
-}''', fn_name)
+}'''), fn_name)
     kernel = _kernel_registery[fn_name]
     idx = cp.asarray(idx, dtype=np.int32)
     ncol = a.shape[1]

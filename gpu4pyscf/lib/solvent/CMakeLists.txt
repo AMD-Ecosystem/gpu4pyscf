@@ -33,7 +33,11 @@ target_compile_options(solvent PRIVATE
 #  set(BUILD_SHARED_LIBS 0)
 #endif()
 
+g4p_set_hip_language(solvent)
 set_target_properties(solvent PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR})
 set_target_properties(solvent PROPERTIES 
   CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
+if(USE_HIP)
+  set_target_properties(solvent PROPERTIES HIP_ARCHITECTURES "${CMAKE_HIP_ARCHITECTURES}")
+endif()

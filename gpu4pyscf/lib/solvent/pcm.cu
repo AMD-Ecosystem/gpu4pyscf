@@ -113,10 +113,17 @@ static void _pcm_left_multiply_S_offdiagonal(double* __restrict__ output, const 
     }
 
     static_assert(THREADS <= 32);
+#ifdef USE_HIP
+    // Each threadIdx.y row is one width-THREADS segment on both wave sizes.
+    for (int offset = THREADS/2; offset > 0; offset >>= 1) {
+        sum_i += __shfl_down(sum_i, offset, THREADS);
+    }
+#else
     const unsigned int mask = __activemask();
     for (int offset = THREADS/2; offset > 0; offset >>= 1) {
         sum_i += __shfl_down_sync(mask, sum_i, offset);
     }
+#endif
 
     if (threadIdx.x == 0) {
         output[i] = sum_i;

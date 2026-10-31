@@ -22,7 +22,11 @@ add_library(sem SHARED
     grad_kernel.cu
 )
 
+g4p_set_hip_language(sem)
 set_target_properties(sem PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}
     CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
 )
+if(USE_HIP)
+  set_target_properties(sem PROPERTIES HIP_ARCHITECTURES "${CMAKE_HIP_ARCHITECTURES}")
+endif()

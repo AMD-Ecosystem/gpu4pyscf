@@ -16,18 +16,7 @@ __version__ = '1.9.0'
 
 from . import _patch_pyscf
 
-# The ROCm build covers the HF / integral libraries. The DFT-dependent
-# subpackages (grad, hessian, solvent, dft, tdscf, nac) need the CUTLASS
-# grouped-GEMM kernels and the GPU libxc functional library, which the ROCm
-# build does not provide yet, so importing them here would fail at package
-# import. On ROCm only lib and scf (the HF J/K path) are imported eagerly; on
-# CUDA every subpackage is imported as before.
-import cupy as _cupy
-if getattr(_cupy.cuda.runtime, 'is_hip', False):
-    from . import lib, scf
-else:
-    from . import lib, grad, hessian, solvent, scf, dft, tdscf, nac
-del _cupy
+from . import lib, grad, hessian, solvent, scf, dft, tdscf, nac
 
 # Overwrite the cupy memory allocator. Make memory pool manage small-sized
 # arrays only.

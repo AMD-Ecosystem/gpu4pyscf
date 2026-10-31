@@ -64,7 +64,7 @@ pip3 install cupy-rocm-7-0
 ```
 The CMake configuration adds `-mllvm -disable-machine-licm` to the HIP build because the machine LICM pass of the ROCm 10.1 compiler (AMD clang 24) miscompiles the Rys J/K kernels on gfx90a and gfx942, crashing every basis with d shells. With ROCm 7.2.1 the d-shell SCF tests pass on gfx90a without it. Remove it once a ROCm release passes the d-shell SCF tests on gfx90a and gfx942 without it.
 
-cuTENSOR is not available on ROCm, so the warning above is expected there. As on CUDA, the build compiles the GPU libxc library for DFT (`BUILD_LIBXC`, on by default), using libxc's own HIP backend. Solvent models, semi-empirical methods and multigrid are not built for ROCm.
+cuTENSOR is not available on ROCm, so the warning above is expected there. As on CUDA, the build compiles the GPU libxc library for DFT (`BUILD_LIBXC`, on by default), using libxc's own HIP backend. CUTLASS is not available on ROCm either, so the grouped GEMMs used in DFT run one GEMM per group.
 
 Features
 --------
