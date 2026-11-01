@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import string
 import numpy as np
 import cupy
 from gpu4pyscf.lib import logger
@@ -51,6 +52,114 @@ def _create_tensor_descriptor(a):
                 strides[i+1] = strides[i]
         a = cupy.ndarray(a.shape, a.dtype, a.data, strides)
     return cutensor.create_tensor_descriptor(a)
+
+_HIP_MAX_BATCH = 65535
+
+def _hip_einsum(subscripts, *operands, **kwargs):
+    '''cupy.einsum, except that a matrix-vector product over more than 65535
+    batches is computed as a broadcast multiply and sum.
+
+    cupy.einsum drops size-1 axes and then computes each pairwise contraction
+    as a batched matmul (B, L, K) @ (B, K, R). When L or R is 1, rocBLAS may
+    run it with a gemv kernel that loops over the batches in steps of 65535
+    and returns wrong entries for all but the last step
+    (https://github.com/ROCm/rocm-libraries/issues/14819). Splitting the batch
+    would avoid the loop, but the multiply and sum is also several times faster
+    for these shapes.
+    '''
+    if (not isinstance(subscripts, str) or kwargs or len(operands) < 2 or
+            not all(isinstance(x, cupy.ndarray) for x in operands) or
+            np.result_type(*operands).kind not in 'fc'):
+        return cupy.einsum(subscripts, *operands, **kwargs)
+    sub = subscripts.replace(' ', '')
+    inputs, arrow, out = sub.partition('->')
+    subs = inputs.split(',')
+    if len(subs) != len(operands):
+        return cupy.einsum(subscripts, *operands)
+    if not arrow:
+        out = ''.join(sorted(c for c in set(inputs) - {',', '.'}
+                             if inputs.count(c) == 1))
+        if '.' in inputs:
+            out = '...' + out
+    if '.' in sub:
+        ranks = [x.ndim - len(s) + 3 for x, s in zip(operands, subs)
+                 if '...' in s]
+        free = [c for c in string.ascii_letters if c not in sub]
+        if (not ranks or (inputs + out).count('.') !=
+                3 * (len(ranks) + ('...' in out)) or
+                min(ranks) < 0 or max(ranks) > len(free)):
+            return cupy.einsum(subscripts, *operands)
+        ell = ''.join(free[:max(ranks)])
+        subs = [s.replace('...', ell[len(ell) - x.ndim + len(s) - 3:])
+                for x, s in zip(operands, subs)]
+        out = out.replace('...', ell)
+    size = {}
+    for s, x in zip(subs, operands):
+        if len(set(s)) != len(s) or len(s) != x.ndim:
+            return cupy.einsum(subscripts, *operands)
+        for c, n in zip(s, x.shape):
+            if size.get(c, 1) not in (1, n) and n != 1:
+                return cupy.einsum(subscripts, *operands)
+            size[c] = max(size.get(c, 1), n)
+    if len(set(out)) != len(out) or not set(out) <= set(size):
+        return cupy.einsum(subscripts, *operands)
+
+    # Follow cupy.einsum's default order: contract the last two operands,
+    # then the result with each preceding operand. cupy.einsum drops the
+    # size-1 axes of each operand first.
+    dims = [{c for c, n in zip(s, x.shape) if n > 1}
+            for s, x in zip(subs, operands)]
+    keeps = []
+    sb, lb = subs[-1], dims[-1]
+    regime = False
+    for i in range(len(subs) - 2, -1, -1):
+        rest = ''.join(subs[:i]) + out
+        keep = out if i == 0 else ''.join(
+            c for c in dict.fromkeys(subs[i] + sb) if c in rest)
+        regime |= _hip_matvec_batch(dims[i], lb, keep, size) > _HIP_MAX_BATCH
+        keeps.append(keep)
+        sb, lb = keep, (dims[i] | lb) & set(keep)
+    if not regime:
+        return cupy.einsum(subscripts, *operands)
+
+    dtype = np.result_type(*operands)
+    operands = [x.astype(dtype, copy=False) for x in operands]
+    b, sb = operands[-1], subs[-1]
+    for i, keep in zip(range(len(subs) - 2, -1, -1), keeps):
+        b = _hip_einsum2(operands[i], subs[i], b, sb, keep)
+        sb = keep
+    return b
+
+def _hip_matvec_batch(la, lb, out, size):
+    '''The batch count if cupy.einsum computes the contraction of operands
+    with the non-trivial axes la and lb as a batched matrix-vector product,
+    otherwise 0'''
+    out = set(out)
+    la, lb = la & (lb | out), lb & (la | out)
+    if not (la & lb) - out or (la - lb and lb - la):
+        return 0
+    return int(np.prod([size[c] for c in la & lb & out]))
+
+def _hip_einsum2(a, sa, b, sb, out):
+    la = {c for c, n in zip(sa, a.shape) if n > 1}
+    lb = {c for c, n in zip(sb, b.shape) if n > 1}
+    size = dict(zip(sa, a.shape))
+    for c, n in zip(sb, b.shape):
+        size[c] = max(size.get(c, 1), n)
+    if _hip_matvec_batch(la, lb, out, size) <= _HIP_MAX_BATCH:
+        return cupy.einsum(f'{sa},{sb}->{out}', a, b)
+    idx = [c for c in dict.fromkeys(out + sa + sb)
+           if c in out or (c in sa and c in sb)]
+    def expand(x, s):
+        own = tuple(i for i, c in enumerate(s) if c not in idx)
+        if own:
+            x = x.sum(axis=own)
+            s = ''.join(c for c in s if c in idx)
+        x = x.transpose([s.index(c) for c in idx if c in s])
+        it = iter(x.shape)
+        return x.reshape([next(it) if c in s else 1 for c in idx])
+    c = expand(a, sa) * expand(b, sb)
+    return c.sum(axis=tuple(range(len(out), len(idx))))
 
 def _contract_einsum(pattern, a, b, alpha, beta, out=None, einsum=cupy.einsum):
     if out is None:
@@ -146,7 +255,7 @@ if contract_engine is not None:
     elif contract_engine == 'cuquantum':
         from cuquantum import contract as einsum # type: ignore
     elif contract_engine == 'cupy':
-        einsum = cupy.einsum
+        einsum = _hip_einsum if cupy.cuda.runtime.is_hip else cupy.einsum
     else:
         raise RuntimeError('unknown tensor contraction engine.')
 

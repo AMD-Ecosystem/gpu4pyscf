@@ -22,7 +22,7 @@ import scipy.linalg
 import cupy
 from pyscf import lib
 from gpu4pyscf.lib import logger
-from gpu4pyscf.lib.cutensor import contract
+from gpu4pyscf.lib.cutensor import contract, _hip_einsum
 from gpu4pyscf.lib import cusolver
 from gpu4pyscf.lib.memcpy import copy_array, p2p_transfer  #NOQA
 from gpu4pyscf.lib import multi_gpu
@@ -60,35 +60,7 @@ def kernel_source(code):
         code = _HIP_KERNEL_PREAMBLE + code.replace('#include <cuComplex.h>', '')
     return code
 
-_cupy_matmul = cupy.matmul
-
-def _hip_matmul(x1, x2, out=None, **kwargs):
-    '''cupy.matmul that keeps a batched product with a one-row left operand
-    off rocBLAS.
-
-    CuPy computes (..., 1, k) @ (..., k, n) as gemm_strided_batched with N=1,
-    which rocBLAS runs as gemv_strided_batched. On gfx1100 (rocBLAS 5.7) that
-    returns wrong entries for m < 8 and a large batch count. cupy.einsum
-    reaches it for every batched dot product, such as 'xg,xg->g'.
-    '''
-    if (out is None and not kwargs
-            and isinstance(x1, cupy.ndarray) and isinstance(x2, cupy.ndarray)
-            and x1.dtype.kind in 'fc' and x2.dtype.kind in 'fc'
-            and max(x1.ndim, x2.ndim) >= 3
-            and (x1.ndim == 1 or x1.shape[-2] == 1)):
-        a = x1 if x1.ndim > 1 else x1[None]
-        b = x2 if x2.ndim > 1 else x2[:,None]
-        if a.shape[-1] == b.shape[-2]:
-            c = (a.swapaxes(-1, -2) * b).sum(axis=-2, keepdims=True)
-            if x1.ndim == 1:
-                c = c[...,0,:]
-            if x2.ndim == 1:
-                c = c[...,0]
-            return c
-    return _cupy_matmul(x1, x2, out=out, **kwargs)
-
-if cupy.cuda.runtime.is_hip:
-    cupy.matmul = _hip_matmul
+einsum = _hip_einsum if cupy.cuda.runtime.is_hip else cupy.einsum
 
 libcupy_helper = load_library('libcupy_helper')
 
