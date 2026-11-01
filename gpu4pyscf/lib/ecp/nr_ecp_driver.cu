@@ -28,6 +28,9 @@
 #include "ecp_type2_ip.cu"
 #include "ecp_type1_ipip.cu"
 #include "ecp_type2_ipip.cu"
+#ifdef USE_HIP
+#include "ecp_type2_lowmem.cu"
+#endif
 
 extern "C" {
 int ECP_cart(double *gctr,
@@ -194,6 +197,15 @@ int ECP_ip_cart(double *gctr,
             int smem_size4 = lj1*ljc1*nfj; // angj
 
             int dynamic_smem_size = smem_size0 + smem_size1 + smem_size2 + smem_size3 + smem_size4;
+#ifdef USE_HIP
+            if (!type2_fits_shared_memory((const void *)type2_cart_ip1_general,
+                                          dynamic_smem_size*sizeof(double))) {
+                return type2_launch_lowmem((const void *)type2_cart_ip1_lowmem, __func__,
+                    gctr, li, lj, lc, li+1, lj, 0,
+                    ao_loc, nao, tasks, ntasks,
+                    ecpbas, ecploc, atm, bas, env);
+            }
+#endif
             cudaError_t err = cudaFuncSetAttribute(
                 type2_cart_ip1_general,
                 cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -269,6 +281,15 @@ int ECP_ipipv_cart(double *gctr,
         int dynamic_smem_size = smem_size0 + smem_size1 + smem_size2 + smem_size3 + smem_size4;
         dynamic_smem_size = max(dynamic_smem_size, 3*NF1_MAX*NF0_MAX);
         //int total_smem_size = static_smem_size + dynamic_smem_size;
+#ifdef USE_HIP
+        if (!type2_fits_shared_memory((const void *)type2_cart_ipipv,
+                                      dynamic_smem_size*sizeof(double))) {
+            return type2_launch_lowmem((const void *)type2_cart_ipipv_lowmem, __func__,
+                gctr, li, lj, lc, li+2, lj, 3*NF1_MAX*NF0_MAX,
+                ao_loc, nao, tasks, ntasks,
+                ecpbas, ecploc, atm, bas, env);
+        }
+#endif
 
         cudaError_t err = cudaFuncSetAttribute(type2_cart_ipipv,
                                          cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -340,6 +361,15 @@ int ECP_ipvip_cart(double *gctr,
         //int static_smem_size = NF1_MAX*NF1_MAX;
         int dynamic_smem_size = smem_size0 + smem_size1 + smem_size2 + smem_size3 + smem_size4;
         dynamic_smem_size = max(dynamic_smem_size, 3*NF0_MAX*NF1_MAX);
+#ifdef USE_HIP
+        if (!type2_fits_shared_memory((const void *)type2_cart_ipvip,
+                                      dynamic_smem_size*sizeof(double))) {
+            return type2_launch_lowmem((const void *)type2_cart_ipvip_lowmem, __func__,
+                gctr, li, lj, lc, li+1, lj+1, 3*NF0_MAX*NF1_MAX,
+                ao_loc, nao, tasks, ntasks,
+                ecpbas, ecploc, atm, bas, env);
+        }
+#endif
 
         //int total_smem_size = static_smem_size + dynamic_smem_size;
         cudaError_t err = cudaFuncSetAttribute(
