@@ -86,6 +86,76 @@ class KnownValues(unittest.TestCase):
         assert out2.flags.c_contiguous
         assert cupy.linalg.norm(out2 - 2*ref) < 1e-12
 
+    def _hip_einsum_matvec(self, subscripts, *operands):
+        # Run cupy.einsum and _hip_einsum with the batch threshold lowered to
+        # 3. Return the number of batched matrix-vector products each issues
+        # and whether _hip_einsum rerouted the call.
+        from unittest import mock
+        from gpu4pyscf.lib import cutensor
+        matmul = cupy.matmul
+        def record(a, b, *args, **kwargs):
+            if (a.ndim == 3 and b.ndim == 3 and a.shape[0] > 3 and
+                    (a.shape[1] == 1 or b.shape[2] == 1)):
+                calls[0] += 1
+            return matmul(a, b, *args, **kwargs)
+        with mock.patch.object(cutensor, '_HIP_MAX_BATCH', 3), \
+             mock.patch.object(cupy, 'matmul', record), \
+             mock.patch.object(cutensor, '_hip_einsum2',
+                               wraps=cutensor._hip_einsum2) as einsum2:
+            calls = [0]
+            ref = cupy.einsum(subscripts, *operands)
+            n_ref = calls[0]
+            calls = [0]
+            out = cutensor._hip_einsum(subscripts, *operands)
+            n_out = calls[0]
+        expected = numpy.einsum(subscripts, *[x.get() for x in operands])
+        assert out.shape == expected.shape
+        assert out.dtype == ref.dtype
+        assert abs(out.get() - expected).max() < 1e-10
+        return n_ref, n_out, einsum2.called
+
+    def test_hip_einsum_broadcast_matvec(self):
+        # 'a' is contracted in the first step because 'd' has size 1 in the
+        # first operand, so the step is a matrix-vector product over 'a'
+        a = cupy.random.rand(1, 4)
+        b = cupy.random.rand(4, 2, 4, 3)
+        c = cupy.random.rand(4, 4, 2)
+        n_ref, n_out, rerouted = self._hip_einsum_matvec('da,deab,dac->', a, b, c)
+        assert n_ref > 0
+        assert n_out == 0
+        assert rerouted
+
+    def test_hip_einsum_random(self):
+        # _hip_einsum reroutes exactly the calls for which cupy.einsum issues
+        # a batched matrix-vector product, and leaves none of them behind
+        rng = numpy.random.RandomState(7)
+        labels = 'abcdef'
+        size = {c: n for c, n in zip(labels, (2, 3, 4, 5, 2, 3))}
+        n_matvec = 0
+        for _ in range(1000):
+            subs = [''.join(rng.permutation(list(labels))[:rng.randint(1, 5)])
+                    for _ in range(rng.randint(2, 5))]
+            used = ''.join(dict.fromkeys(''.join(subs)))
+            if rng.rand() < .3:
+                subscripts = ','.join(subs)
+            else:
+                out = rng.permutation(list(used))[:rng.randint(0, len(used))]
+                subscripts = ','.join(subs) + '->' + ''.join(out)
+            operands = []
+            for s in subs:
+                shape = [1 if rng.rand() < .25 else size[c] for c in s]
+                x = cupy.asarray(rng.rand(*shape))
+                if rng.rand() < .2:
+                    x = x + 1j * x
+                if rng.rand() < .2:
+                    x = cupy.asfortranarray(x)
+                operands.append(x)
+            n_ref, n_out, rerouted = self._hip_einsum_matvec(subscripts, *operands)
+            assert n_out == 0, subscripts
+            assert rerouted == (n_ref > 0), subscripts
+            n_matvec += n_ref > 0
+        assert n_matvec > 20
+
 if __name__ == "__main__":
     print("Full tests for cutensor module")
     unittest.main()

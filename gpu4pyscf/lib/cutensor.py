@@ -113,7 +113,7 @@ def _hip_einsum(subscripts, *operands, **kwargs):
     sb, lb = subs[-1], dims[-1]
     regime = False
     for i in range(len(subs) - 2, -1, -1):
-        rest = ''.join(subs[:i]) + out
+        rest = ''.join(''.join(d) for d in dims[:i]) + out
         keep = out if i == 0 else ''.join(
             c for c in dict.fromkeys(subs[i] + sb) if c in rest)
         regime |= _hip_matvec_batch(dims[i], lb, keep, size) > _HIP_MAX_BATCH
