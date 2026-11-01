@@ -89,8 +89,10 @@ class KnownValues(unittest.TestCase):
     def _hip_einsum_matvec(self, subscripts, *operands):
         # Run cupy.einsum and _hip_einsum with the batch threshold lowered to
         # 3. Return the number of batched matrix-vector products each issues
-        # and whether _hip_einsum rerouted the call.
+        # and whether _hip_einsum rerouted the call. Routine accelerators are
+        # cleared so that cupy.einsum calls cupy.matmul rather than cuTENSOR.
         from unittest import mock
+        from cupy._core import _accelerator
         from gpu4pyscf.lib import cutensor
         matmul = cupy.matmul
         def record(a, b, *args, **kwargs):
@@ -98,16 +100,21 @@ class KnownValues(unittest.TestCase):
                     (a.shape[1] == 1 or b.shape[2] == 1)):
                 calls[0] += 1
             return matmul(a, b, *args, **kwargs)
-        with mock.patch.object(cutensor, '_HIP_MAX_BATCH', 3), \
-             mock.patch.object(cupy, 'matmul', record), \
-             mock.patch.object(cutensor, '_hip_einsum2',
-                               wraps=cutensor._hip_einsum2) as einsum2:
-            calls = [0]
-            ref = cupy.einsum(subscripts, *operands)
-            n_ref = calls[0]
-            calls = [0]
-            out = cutensor._hip_einsum(subscripts, *operands)
-            n_out = calls[0]
+        accelerators = list(_accelerator.get_routine_accelerators())
+        _accelerator.set_routine_accelerators([])
+        try:
+            with mock.patch.object(cutensor, '_HIP_MAX_BATCH', 3), \
+                 mock.patch.object(cupy, 'matmul', record), \
+                 mock.patch.object(cutensor, '_hip_einsum2',
+                                   wraps=cutensor._hip_einsum2) as einsum2:
+                calls = [0]
+                ref = cupy.einsum(subscripts, *operands)
+                n_ref = calls[0]
+                calls = [0]
+                out = cutensor._hip_einsum(subscripts, *operands)
+                n_out = calls[0]
+        finally:
+            _accelerator.set_routine_accelerators(accelerators)
         expected = numpy.einsum(subscripts, *[x.get() for x in operands])
         assert out.shape == expected.shape
         assert out.dtype == ref.dtype
