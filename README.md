@@ -62,7 +62,7 @@ If CMake does not find the HIP compiler, add `-DCMAKE_HIP_COMPILER=<rocm_path>/l
 ```sh
 pip3 install cupy-rocm-7-0
 ```
-The CMake configuration adds `-mllvm -disable-machine-licm` to the HIP build because the machine LICM pass of the ROCm 10.1 compiler (AMD clang 24) miscompiles the Rys J/K kernels on gfx90a and gfx942, crashing every basis with d shells. With ROCm 7.2.1 the d-shell SCF tests pass on gfx90a without it. Remove it once a ROCm release passes the d-shell SCF tests on gfx90a and gfx942 without it.
+The CMake configuration adds `-mllvm -disable-machine-licm` to the HIP build to work around a register coalescer bug in the ROCm 10.1 compiler (AMD clang 24), which miscompiles the Rys J/K kernels on gfx90a and gfx942 and crashes every basis with d shells. The bug is fixed in upstream LLVM (commit 8c6e07731faf) and in ROCm 10.2. Both compilers report the same clang version, so CMake cannot tell them apart and the flag is applied to every HIP build.
 
 cuTENSOR is not available on ROCm, so the warning above is expected there. As on CUDA, the build compiles the GPU libxc library for DFT (`BUILD_LIBXC`, on by default), using libxc's own HIP backend. CUTLASS is not available on ROCm either, so the grouped GEMMs used in DFT run one GEMM per group.
 

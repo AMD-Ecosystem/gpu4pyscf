@@ -54,14 +54,16 @@ if(USE_HIP)
   # keyword; nvcc tolerates it, clang-HIP rejects it, so downgrade to a warning.
   string(APPEND CMAKE_HIP_FLAGS
     " -DUSE_HIP -include ${PROJECT_SOURCE_DIR}/cuda_to_hip.h -ffp-contract=on -fvisibility=default -fgpu-rdc -Wno-register")
-  # -mllvm -disable-machine-licm works around a compiler bug seen with ROCm 10.1
-  # (AMD clang 24): on gfx90a and gfx942 machine LICM clobbers the register
-  # holding the atomicAdd offset at the top of the persistent loop in the Rys J/K
-  # kernels, and every basis with d shells then crashes with a memory access
-  # fault. With ROCm 7.2.1 the d-shell SCF tests pass on gfx90a without it.
-  # With -fgpu-rdc the device code is generated at link time, which picks the
-  # flag up from CMAKE_HIP_FLAGS as described above. Remove it once a ROCm
-  # release passes the d-shell SCF tests on gfx90a and gfx942 without it.
+  # -mllvm -disable-machine-licm works around a register coalescer bug in the
+  # ROCm 10.1 compiler (AMD clang 24): on gfx90a and gfx942 it lets a load in
+  # the persistent loop of the Rys J/K kernels overwrite the zero that machine
+  # LICM hoisted out of the loop as the atomicAdd offset, and every basis with
+  # d shells then crashes with a memory access fault. Without the hoist the
+  # pattern does not form. The bug is fixed in upstream LLVM (8c6e07731faf)
+  # and in ROCm 10.2, but both ROCm compilers report clang 24.0.0, so the flag
+  # is applied to every HIP build. With -fgpu-rdc the device code is generated
+  # at link time, which picks the flag up from CMAKE_HIP_FLAGS as described
+  # above. Remove it once ROCm 10.1 no longer needs to be supported.
   string(APPEND CMAKE_HIP_FLAGS " -mllvm -disable-machine-licm")
   # Resolve `#include <cuda_runtime.h>` in the kernel sources to the compat shim.
   include_directories(BEFORE ${PROJECT_SOURCE_DIR}/hip_compat)
