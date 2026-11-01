@@ -24,6 +24,7 @@ from pyscf import lib
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.cupy_helper import (
     contract, ndarray, get_avail_mem, empty_aligned)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.gto.mole import RysIntEnvVars, _scale_sp_ctr_coeff
 from gpu4pyscf.df.int3c2e_bdiv import _split_l_ctr_pattern, get_ao_pair_loc
 from gpu4pyscf.df.grad.rhf import factorize_dm
@@ -359,11 +360,11 @@ def _get_ejk_derivatives(int3c2e_opt, dm, hermi=0, j_factor=1., k_factor=1.,
             dm_vG_compressed[diag_idx] *= .5
             vG = contract('rg,rg->g', pqG_compressed[:n_compact_pairs],
                           dm_vG_compressed[:n_compact_pairs]).real
-            sigma_G += 2 * cp.einsum('g,xyg->xy', vG, wcoulG_LR1[:,:,p0:p1])
+            sigma_G += 2 * einsum('g,xyg->xy', vG, wcoulG_LR1[:,:,p0:p1])
             if separated_dd:
                 vG = contract('rg,rg->g', pqG_compressed[n_compact_pairs:],
                               dm_vG_compressed[n_compact_pairs:]).real
-                sigma_G += 2 * cp.einsum('g,xyg->xy', vG, wcoulG_FR1[:,:,p0:p1])
+                sigma_G += 2 * einsum('g,xyg->xy', vG, wcoulG_FR1[:,:,p0:p1])
 
             # (ij|r)^{[0]} * metric * (r|G)^{[1]} (ji|G)^{[0]}
             pqG_swap = dm_vG_compressed # swap pqG_compressed, to release buf
@@ -397,7 +398,7 @@ def _get_ejk_derivatives(int3c2e_opt, dm, hermi=0, j_factor=1., k_factor=1.,
             dm_auxG1 = contract('sr,sG->rG', dm_aux, auxG.view(np.float64),
                                 out=ndarray((naux,nGv*2), buffer=buf)).view(np.complex128)
             vG = contract('rg,rg->g', dm_auxG1, auxG.conj()).real
-            sigma_G -= .5 * cp.einsum('g,xyg->xy', vG, wcoulG_LR1[:,:,p0:p1])
+            sigma_G -= .5 * einsum('g,xyg->xy', vG, wcoulG_LR1[:,:,p0:p1])
 
             dm_auxG1 *= wcoulG_LR0[p0:p1]
             dm_auxG -= dm_auxG1
@@ -553,7 +554,7 @@ def _get_ejk_derivatives(int3c2e_opt, dm, hermi=0, j_factor=1., k_factor=1.,
         de_ewald *= -k_factor * exx_0
         ejk_sigma += de_ewald
 
-        ek_G0 = float(cp.einsum('ij,ji->', s0, k_dm).real.get())
+        ek_G0 = float(einsum('ij,ji->', s0, k_dm).real.get())
         # *.5 for the factor 1/2 in Coulomb operator
         ejk_sigma[-3:] -= k_factor * .5 * ek_G0 * exx_1
     return ejk_sigma

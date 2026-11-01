@@ -22,6 +22,7 @@ import gpu4pyscf
 import pytest
 from gpu4pyscf.lib.multi_gpu import num_devices
 from gpu4pyscf.df.tests.test_df_tdrhf_grad import diagonalize_tda
+from gpu4pyscf.lib.cupy_helper import einsum
 
 
 atom = """
@@ -309,7 +310,7 @@ class KnownValues(unittest.TestCase):
         cp.random.seed(4)
         c = cp.random.rand(nao, nao) - .5
         s = mf.get_ovlp()
-        diag = cp.einsum('pi,pq,qi->i', c, s, c)
+        diag = einsum('pi,pq,qi->i', c, s, c)
         mf.mo_coeff = c / diag**.5
         mf.mo_energy = cp.arange(nao)*3.
         mf.mo_occ = cp.zeros(nao)

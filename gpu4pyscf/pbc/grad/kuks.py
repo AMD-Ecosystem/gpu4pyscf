@@ -25,7 +25,7 @@ from gpu4pyscf.pbc.grad import krhf as krhf_grad
 from gpu4pyscf.pbc.grad import kuhf as kuhf_grad
 from gpu4pyscf.pbc.grad import krks as krks_grad
 from gpu4pyscf.pbc.df import GDF
-from gpu4pyscf.lib.cupy_helper import contract
+from gpu4pyscf.lib.cupy_helper import contract, einsum
 from gpu4pyscf.pbc.dft import multigrid, multigrid_v3, BeckeGrids
 from gpu4pyscf.pbc.dft.gen_grid import get_becke_weight_derivative
 from gpu4pyscf.pbc.dft.numint import _GTOvalOpt
@@ -244,10 +244,10 @@ def get_vxc_full_response(ni, cell, grids, xc_code, dm_kpts, kpts, hermi=1):
             for kn in range(nkpts):
                 vtmp_a = krks_grad._d1_dot_(ao_ks[kn,1:4], aowa[kn])
                 dvmat_orbital_response[0,kn] += vtmp_a
-                de_grid_response_rho[i_atom] += cp.einsum('xij,ji->x', vtmp_a, dm_kpts[0,kn]) * 2
+                de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp_a, dm_kpts[0,kn]) * 2
                 vtmp_b = krks_grad._d1_dot_(ao_ks[kn,1:4], aowb[kn])
                 dvmat_orbital_response[1,kn] += vtmp_b
-                de_grid_response_rho[i_atom] += cp.einsum('xij,ji->x', vtmp_b, dm_kpts[1,kn]) * 2
+                de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp_b, dm_kpts[1,kn]) * 2
                 del vtmp_a, vtmp_b
             del rho, aowa, aowb, vxc
 
@@ -274,10 +274,10 @@ def get_vxc_full_response(ni, cell, grids, xc_code, dm_kpts, kpts, hermi=1):
             for kn in range(nkpts):
                 vtmp_a = krks_grad._gga_grad_sum_(ao_ks[kn], wv[0])
                 dvmat_orbital_response[0,kn] += vtmp_a
-                de_grid_response_rho[i_atom] += cp.einsum('xij,ji->x', vtmp_a, dm_kpts[0,kn]) * 2
+                de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp_a, dm_kpts[0,kn]) * 2
                 vtmp_b = krks_grad._gga_grad_sum_(ao_ks[kn], wv[1])
                 dvmat_orbital_response[1,kn] += vtmp_b
-                de_grid_response_rho[i_atom] += cp.einsum('xij,ji->x', vtmp_b, dm_kpts[1,kn]) * 2
+                de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp_b, dm_kpts[1,kn]) * 2
                 del vtmp_a, vtmp_b
             del rho, vxc
 
@@ -312,10 +312,10 @@ def get_vxc_full_response(ni, cell, grids, xc_code, dm_kpts, kpts, hermi=1):
             for kn in range(nkpts):
                 vtmp_a = krks_grad._gga_grad_sum_(ao_ks[kn], wv[0,:4]) + krks_grad._tau_grad_dot_(ao_ks[kn], wv[0,4])
                 dvmat_orbital_response[0,kn] += vtmp_a
-                de_grid_response_rho[i_atom] += cp.einsum('xij,ji->x', vtmp_a, dm_kpts[0,kn]) * 2
+                de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp_a, dm_kpts[0,kn]) * 2
                 vtmp_b = krks_grad._gga_grad_sum_(ao_ks[kn], wv[1,:4]) + krks_grad._tau_grad_dot_(ao_ks[kn], wv[1,4])
                 dvmat_orbital_response[1,kn] += vtmp_b
-                de_grid_response_rho[i_atom] += cp.einsum('xij,ji->x', vtmp_b, dm_kpts[1,kn]) * 2
+                de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp_b, dm_kpts[1,kn]) * 2
                 del vtmp_a, vtmp_b
             del rho, vxc
 

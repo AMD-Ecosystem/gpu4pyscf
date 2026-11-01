@@ -19,7 +19,7 @@ from pyscf.mp import mp2 as mp2_pyscf
 from gpu4pyscf import df
 from gpu4pyscf.mp import mp2
 from gpu4pyscf.lib import logger
-from gpu4pyscf.lib.cupy_helper import contract, tag_array, reduce_to_device
+from gpu4pyscf.lib.cupy_helper import contract, tag_array, reduce_to_device, einsum
 from gpu4pyscf.__config__ import num_devices
 from pyscf import __config__
 
@@ -96,8 +96,8 @@ def kernel(mp, mo_energy=None, mo_coeff=None, eris=None, with_t2=WITH_T2,
         gi = gi.reshape(nvir,nocc,nvir).transpose(1,0,2)
         #lib.direct_sum('jb+a->jba', eia, eia[i])
         t2i = gi/(eia[:,:,None] + eia[i])
-        edi = cupy.einsum('jab,jab', t2i, gi) * 2
-        exi = -cupy.einsum('jab,jba', t2i, gi)
+        edi = einsum('jab,jab', t2i, gi) * 2
+        exi = -einsum('jab,jba', t2i, gi)
         emp2_ss += edi*0.5 + exi
         emp2_os += edi*0.5
         if with_t2:

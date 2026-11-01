@@ -24,6 +24,7 @@ from gpu4pyscf.dft.rks import RKS
 from gpu4pyscf.dft.uks import UKS
 from gpu4pyscf.scf.hf import RHF
 from gpu4pyscf.scf.uhf import UHF
+from gpu4pyscf.lib.cupy_helper import einsum
 
 def get_qchem_sad_guess_energy(mf, dm0):
     mol = mf.mol
@@ -43,9 +44,9 @@ def get_qchem_sad_guess_energy(mf, dm0):
         else:
             vk = mf.get_k(mol, dm0, hermi)
         if dm0.ndim == 2:
-            e += 0.25 * float(cp.einsum('ij,ji->', dm0, vk).real)
+            e += 0.25 * float(einsum('ij,ji->', dm0, vk).real)
         else:
-            e += 0.5 * float(cp.einsum('uij,uji->', dm0, vk).real)
+            e += 0.5 * float(einsum('uij,uji->', dm0, vk).real)
 
     # Another likely bug, the guess step energy misses the solvent energy.
     if hasattr(mf, 'with_solvent'):

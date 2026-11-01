@@ -30,7 +30,7 @@ from gpu4pyscf.df import int3c2e
 from gpu4pyscf.df.df_jk import (
     _tag_factorize_dm, _DFHF, _make_factorized_dm, _aggregate_dm_factor_l,
     _transpose_dm)
-from gpu4pyscf.lib.cupy_helper import contract, asarray, tag_array
+from gpu4pyscf.lib.cupy_helper import contract, asarray, tag_array, einsum
 from gpu4pyscf.scf import cphf
 from gpu4pyscf.lib import utils
 from gpu4pyscf.gto.mole import groupby, ATOM_OF
@@ -207,7 +207,7 @@ def _contract_h1e_dm_asymmetric(mol, h1e, dm):
     ao_loc = mol.ao_loc
     dims = ao_loc[1:] - ao_loc[:-1]
     atm_id_for_ao = np.repeat(mol._bas[:,ATOM_OF], dims)
-    de_partial = cp.einsum('xij,ji->ix', h1e, dm).real
+    de_partial = einsum('xij,ji->ix', h1e, dm).real
     de_partial = de_partial.get()
     de = groupby(atm_id_for_ao, de_partial, op='sum')
     assert len(de) == mol.natm

@@ -32,6 +32,7 @@ from pyscf.data.nist import HARTREE2EV
 from gpu4pyscf.lib import logger, utils
 from gpu4pyscf.lib.cupy_helper import (
     return_cupy_array, contract, tag_array, sandwich_dot, eigh, asarray, get_avail_mem)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.scf import hf as mol_hf
 from gpu4pyscf.pbc.scf import hf as pbchf
 from gpu4pyscf.pbc.scf.rsjk import PBCJKMatrixOpt
@@ -192,8 +193,8 @@ def energy_elec(mf, dm_kpts=None, h1e_kpts=None, vhf_kpts=None):
         vhf_kpts = mf.get_veff(mf.cell, dm_kpts)
 
     nkpts = len(dm_kpts)
-    e1 = 1./nkpts * cp.einsum('kij,kji->', dm_kpts, h1e_kpts).get()
-    e2 = 1./nkpts * cp.einsum('kij,kji->', dm_kpts, vhf_kpts).get() * 0.5
+    e1 = 1./nkpts * einsum('kij,kji->', dm_kpts, h1e_kpts).get()
+    e2 = 1./nkpts * einsum('kij,kji->', dm_kpts, vhf_kpts).get() * 0.5
     ecoul = vhf_kpts.ecoul
     exx = e2 - ecoul
     mf.scf_summary['e1'] = e1.real
@@ -739,7 +740,7 @@ class KRHF(KSCF):
 
         if s1e is None:
             s1e = self.get_ovlp(cell, kpts)
-        ne = float(cp.einsum('kij,kji->', dm, s1e).real)
+        ne = float(einsum('kij,kji->', dm, s1e).real)
         # FIXME: consider the fractional num_electron or not? This maybe
         # relate to the charged system.
         nelectron = float(self.cell.tot_electrons(nkpts))
@@ -837,8 +838,8 @@ def _get_veff(mf, cell=None, dm_kpts=None, dm_last=None, vhf_last=None,
         if not with_ecoul:
             return None
         if vj.ndim == 2:
-            return cp.einsum('ij,ji->', dm, vj).real.get() * .5
-        return cp.einsum('Kij,Kji->', dm, vj).real.get() * .5
+            return einsum('ij,ji->', dm, vj).real.get() * .5
+        return einsum('Kij,Kji->', dm, vj).real.get() * .5
 
     j_engine = None
     if with_j:

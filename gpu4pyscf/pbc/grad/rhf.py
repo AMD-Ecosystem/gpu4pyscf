@@ -23,7 +23,7 @@ from pyscf import gto
 from pyscf.pbc.lib.kpts_helper import gamma_point
 from pyscf.pbc.df.df_jk import _format_kpts_band
 from gpu4pyscf.lib import logger
-from gpu4pyscf.lib.cupy_helper import dist_matrix, asarray
+from gpu4pyscf.lib.cupy_helper import dist_matrix, asarray, einsum
 import gpu4pyscf.grad.rhf as mol_rhf
 from gpu4pyscf.gto.mole import SortedCell
 from gpu4pyscf.pbc.tools.k2gamma import kpts_to_kmesh
@@ -226,17 +226,17 @@ def contract_h1e_dm(cell, h1e, dm, hermi=0):
     atm_id_for_ao = np.repeat(cell._bas[:,ATOM_OF], dims)
 
     if dm.ndim == 2: # RHF
-        de_partial = cp.einsum('xij,ji->ix', h1e, dm).real
+        de_partial = einsum('xij,ji->ix', h1e, dm).real
         if hermi != 1:
-            de_partial += cp.einsum('xij,ij->ix', h1e, dm.conj()).real
+            de_partial += einsum('xij,ij->ix', h1e, dm.conj()).real
     elif dm.ndim == 3: # KRHF or UHF
-        de_partial = cp.einsum('kxij,kji->ix', h1e, dm).real
+        de_partial = einsum('kxij,kji->ix', h1e, dm).real
         if hermi != 1:
-            de_partial += cp.einsum('kxij,kij->ix', h1e, dm.conj()).real
+            de_partial += einsum('kxij,kij->ix', h1e, dm.conj()).real
     else: # dm.ndim == 4 KUHF
-        de_partial = cp.einsum('skxij,skji->ix', h1e, dm).real
+        de_partial = einsum('skxij,skji->ix', h1e, dm).real
         if hermi != 1:
-            de_partial += cp.einsum('skxij,skji->ix', h1e, dm.conj()).real
+            de_partial += einsum('skxij,skji->ix', h1e, dm.conj()).real
 
     de_partial = de_partial.get()
     de = groupby(atm_id_for_ao, de_partial, op='sum')
@@ -431,13 +431,13 @@ def ewald_derivatives(cell, ew_eta=None, ew_cut=None):
     blksize = int(1e7 // (charge_pairs.size*3))
     for p0, p1 in lib.prange(0, len(Ls), blksize):
         rij = coords[:,None,:] - coords[None,:,:] + Ls[p0:p1,None,None,:]
-        r2 = cp.einsum('nijx,nijx->nij', rij, rij)
+        r2 = einsum('nijx,nijx->nij', rij, rij)
         r2[r2 < 1e-30] = np.inf
         r = cp.sqrt(r2)
         fac = erfc(ew_eta*r)/r + 2*ew_eta/np.sqrt(np.pi)*cp.exp(-ew_eta**2*r2)
         fac *= charge_pairs / r2
-        grad_sigma[:-3] -= cp.einsum('nij,nijx->ix', fac, rij)
-        grad_sigma[-3:] -= .5 * cp.einsum('nij,nijx,nijy->xy', fac, rij, rij)
+        grad_sigma[:-3] -= einsum('nij,nijx->ix', fac, rij)
+        grad_sigma[-3:] -= .5 * einsum('nij,nijx,nijy->xy', fac, rij, rij)
 
     vol = cell.vol
     log_precision = np.log(cell.precision / (charges.sum()*16*np.pi**2))

@@ -28,7 +28,7 @@ from gpu4pyscf.lib import logger
 from gpu4pyscf.pbc.dft import kuks
 from gpu4pyscf.pbc.dft.krkspu import _set_U, _make_minao_lo, reference_mol
 from gpu4pyscf.pbc.gto import int1e
-from gpu4pyscf.lib.cupy_helper import asarray, contract, tag_array
+from gpu4pyscf.lib.cupy_helper import asarray, contract, tag_array, einsum
 
 def get_veff(ks, cell=None, dm=None, dm_last=None, vhf_last=None, hermi=1,
              kpts=None, kpts_band=None):
@@ -122,7 +122,7 @@ def energy_elec(mf, dm_kpts=None, h1e_kpts=None, vhf=None):
     if hasattr(kpts, "weights_ibz"):
         raise NotImplementedError('DFT+U for k-point symmetry')
     nkpts = len(h1e_kpts)
-    e1 = cp.einsum('kij,nkji->', h1e_kpts, dm_kpts).get()[()] / nkpts
+    e1 = einsum('kij,nkji->', h1e_kpts, dm_kpts).get()[()] / nkpts
     ecoul = vhf.ecoul
     exc = vhf.exc.real
     E_U = vhf.E_U.real

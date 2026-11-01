@@ -18,7 +18,7 @@ import numpy as np
 from pyscf import lib
 from pyscf.gto import ATOM_OF
 from pyscf.lib import c_null_ptr
-from gpu4pyscf.lib.cupy_helper import load_library, cart2sph, get_avail_mem
+from gpu4pyscf.lib.cupy_helper import load_library, cart2sph, get_avail_mem, einsum
 from gpu4pyscf.gto.int3c1e import VHFOpt
 
 libgint = load_library('libgint')
@@ -453,7 +453,7 @@ def get_int3c1e_ip1_charge_and_density_contracted(mol, grids, charge_exponents, 
     assert dm.shape[0] == dm.shape[1] and dm.shape[0] == mol.nao
 
     int3c_ip1 = get_int3c1e_ip1_charge_contracted(mol, grids, charge_exponents, charges, intopt)
-    int3c_ip1 = cp.einsum('xij,ij->xi', int3c_ip1, dm)
+    int3c_ip1 = einsum('xij,ij->xi', int3c_ip1, dm)
     return int3c_ip1
 
 def get_int3c1e_ip2_charge_and_density_contracted(mol, grids, charge_exponents, dm, charges, intopt):

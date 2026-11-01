@@ -37,6 +37,7 @@ from gpu4pyscf.lib.utils import splits_by_blocksize
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.cupy_helper import (
     load_library, contract, get_avail_mem, asarray, ndarray, hermi_triu)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.df.int3c2e_bdiv import get_ao_pair_loc
 from gpu4pyscf.scf.jk import (
     _nearest_power2, _scale_sp_ctr_coeff, SHM_SIZE)
@@ -595,7 +596,7 @@ class FTOpt:
         for p0, p1 in lib.prange(0, ngrids, blksize):
             # conj((r|G)^{[0]}) (ij|G)^{[0]}
             pqG = eval_ft(Gv[p0:p1], out=buf)
-            rhoGz = cp.einsum('pG,p->G', pqG.view(np.float64), dm_tril)
+            rhoGz = einsum('pG,p->G', pqG.view(np.float64), dm_tril)
             rhoG[p0:p1] = rhoGz.view(np.complex128)
         return rhoG
 

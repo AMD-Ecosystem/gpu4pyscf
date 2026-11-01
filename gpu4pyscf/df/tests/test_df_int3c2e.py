@@ -5,7 +5,7 @@ import pyscf
 from pyscf import lib
 from pyscf.df import incore
 from gpu4pyscf.df import int3c2e_bdiv
-from gpu4pyscf.lib.cupy_helper import contract
+from gpu4pyscf.lib.cupy_helper import contract, einsum
 
 def test_int3c2e():
     mol = pyscf.M(
@@ -489,7 +489,7 @@ C2   -.3    .2     -.7''',
     row, col = divmod(pair_address, nao)
     cderi = cp.vstack([cp.asarray(x) for x in cderi])
     cderi = _unpack(cderi, row, col)
-    dat = cp.einsum('pij,p->ij', cderi, cp.einsum('pij,ij->p', cderi, dm))
+    dat = einsum('pij,p->ij', cderi, einsum('pij,ij->p', cderi, dm))
     assert abs(dat.get() - ref).max() < 1e-10
 
     opt = int3c2e_bdiv.Int3c2eOpt(SortedMole.from_mol(mol, decontract=False), auxmol)
@@ -497,7 +497,7 @@ C2   -.3    .2     -.7''',
     row, col = divmod(pair_address, nao)
     cderi = cp.vstack([cp.asarray(x) for x in cderi])
     cderi = _unpack(cderi, row, col)
-    dat = cp.einsum('pij,p->ij', cderi, cp.einsum('pij,ij->p', cderi, dm))
+    dat = einsum('pij,p->ij', cderi, einsum('pij,ij->p', cderi, dm))
     assert abs(dat.get() - ref).max() < 1e-10
 
 def test_cholesky_eri_rsh():

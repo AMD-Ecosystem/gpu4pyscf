@@ -23,7 +23,7 @@ from gpu4pyscf.df.hessian import rhf as df_rhf_hess
 from gpu4pyscf.df.hessian import uhf as df_uhf_hess
 from gpu4pyscf.df.grad import uhf as uhf_grad
 from gpu4pyscf.df import int3c2e_bdiv as int3c2e
-from gpu4pyscf.lib.cupy_helper import tag_array
+from gpu4pyscf.lib.cupy_helper import tag_array, einsum
 
 def setUpModule():
     global mol1, mol, auxmol
@@ -281,7 +281,7 @@ class KnownValues(unittest.TestCase):
             j3c = cp.array(incore.aux_e2(mol1, auxmol1))
             j2c = cp.array(auxmol1.intor('int2c2e'))
             eri = cp.einsum('ijp,pq,klq->ijkl', j3c, cp.linalg.inv(j2c), j3c)
-            vj = cp.einsum('ijkl,nji->kl', eri, dm)
+            vj = einsum('ijkl,nji->kl', eri, dm)
             vk = cp.einsum('ijkl,njk->nil', eri, dm)
             return vj - vk
 

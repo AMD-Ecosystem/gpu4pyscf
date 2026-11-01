@@ -23,7 +23,7 @@ from pyscf import lib
 from pyscf.pbc.grad import krhf as krhf_cpu
 from pyscf.pbc.gto.pseudo.pp import get_vlocG, get_alphas
 from gpu4pyscf.lib import logger
-from gpu4pyscf.lib.cupy_helper import contract, asarray, batched_vec_norm2
+from gpu4pyscf.lib.cupy_helper import contract, asarray, batched_vec_norm2, einsum
 from gpu4pyscf.grad import rhf as molgrad
 from gpu4pyscf.pbc.dft import numint as pbc_numint
 from gpu4pyscf.pbc.dft.numint import eval_ao_kpts, _GTOvalOpt
@@ -54,7 +54,7 @@ def get_hcore(cell, kpts):
         Gv = cp.asarray(Gv_cpu)
         coords = cp.asarray(cell.get_uniform_grids())
         vlocG = get_vlocG(cell)
-        vpplocG = -cp.einsum('ij,ij->j', SI, vlocG)
+        vpplocG = -einsum('ij,ij->j', SI, vlocG)
         vpplocG[0] = cp.sum(get_alphas(cell))
         vpplocR = pbctools.ifft(vpplocG, cell.mesh).real
         ni = pbc_numint.KNumInt()
@@ -158,7 +158,7 @@ def get_nuc_fftdf(mf_grad, cell, dm0, kpts):
     dh1e = cp.empty([cell.natm, 3])
     for ia in range(cell.natm):
         h1ao = hcore_deriv(ia)
-        dh1e[ia] = cp.einsum('kxij,kji->x', h1ao, dm0).real
+        dh1e[ia] = einsum('kxij,kji->x', h1ao, dm0).real
     grad_sigma[:-3] += dh1e.get() / nkpts
     # hcore_generator includes kinetic gradients, but not kinetic strain.
     grad_sigma[-3:] += int1e.kin_derivatives(cell, dm0, kpts)[-3:]

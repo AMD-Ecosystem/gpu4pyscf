@@ -17,7 +17,7 @@ import math
 import warnings
 import cupy as cp
 import numpy as np
-from gpu4pyscf.lib.cupy_helper import contract
+from gpu4pyscf.lib.cupy_helper import contract, einsum
 from pyscf.dft.LebedevGrid import MakeAngularGrid
 
 MAX_GRIDS_PER_TASK = 65536
@@ -227,14 +227,14 @@ def _eval_xc_lebedev(func, rho_tm, deriv, spin_samples,
         rho = rho.reshape(2, nvar, ngrids, nsg)
         s = rho[1]
         rho_pure = rho[0,0]
-        exc_rho = exc * rho_pure + cp.einsum('xgo,xgo->go', vxc[1], s)
-        exc_eff += cp.einsum('go,o->g', exc_rho, p_weights)
+        exc_rho = exc * rho_pure + einsum('xgo,xgo->go', vxc[1], s)
+        exc_eff += einsum('go,o->g', exc_rho, p_weights)
 
         if deriv > 0:
             fxc = xc_orig[2].reshape(2, nvar, 2, nvar, ngrids, nsg)
             # vs * 2 + s*f_s_st
             vxc[1] *= 2
-            vxc += cp.einsum('xbygo,xgo->bygo', fxc[1], s)
+            vxc += einsum('xbygo,xgo->bygo', fxc[1], s)
             c_tm = _ts2tm_transformation(p_sgrids)
             cw_tm = c_tm * p_weights
             vxc_eff += cp.einsum('rao,axgo->rxg', cw_tm, vxc)
@@ -244,7 +244,7 @@ def _eval_xc_lebedev(func, rho_tm, deriv, spin_samples,
             fxc[1,:,1] *= 3
             fxc[0,:,1] *= 2
             fxc[1,:,0] *= 2
-            fxc += cp.einsum('xbyczgo,xgo->byczgo', kxc[1], s)
+            fxc += einsum('xbyczgo,xgo->byczgo', kxc[1], s)
             fxc = cp.einsum('rao,axbygo->rxbygo', c_tm, fxc)
             fxc_eff += cp.einsum('sbo,rxbygo->rxsyg', cw_tm, fxc)
 
@@ -258,7 +258,7 @@ def _eval_xc_lebedev(func, rho_tm, deriv, spin_samples,
             kxc[0,:,1,:,0] *= 2
             kxc[0,:,0,:,1] *= 2
 
-            kxc += cp.einsum('wbxcydzgo,wgo->bxcydzgo', lxc[1], s)
+            kxc += einsum('wbxcydzgo,wgo->bxcydzgo', lxc[1], s)
             kxc = cp.einsum('rao,axbyczgo->rxbyczgo', c_tm, kxc)
             kxc = cp.einsum('sbo,rxbyczgo->rxsyczgo', c_tm, kxc)
             # kxc = cp.einsum('rao,sbo,axbyczgo->rxsyczgo', c_tm, c_tm,kxc)

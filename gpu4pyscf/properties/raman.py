@@ -16,7 +16,7 @@ import numpy as np
 import cupy as cp
 from pyscf.hessian import thermo
 from gpu4pyscf.properties import polarizability
-from gpu4pyscf.lib.cupy_helper import contract
+from gpu4pyscf.lib.cupy_helper import contract, einsum
 from pyscf.data import nist
 from gpu4pyscf.scf.hf import RHF
 
@@ -91,7 +91,7 @@ def polarizability_derivative_numerical_dEdE(mf, dE = 2.5e-3):
             mf.with_solvent.equilibrium_solvation = False
 
     def get_gradient_at_E(mf, E):
-        mf.get_hcore = lambda *args: Hcore + cp.einsum('d,dij->ij', E, dipole_integral)
+        mf.get_hcore = lambda *args: Hcore + einsum('d,dij->ij', E, dipole_integral)
         if hasattr(mf, "with_solvent"):
             if not mf.with_solvent.equilibrium_solvation:
                 mf.with_solvent.frozen_dm0_for_finite_difference_without_response = dm0

@@ -15,7 +15,7 @@
 import cupy as cp
 import numpy as np
 from gpu4pyscf.lib import logger
-from gpu4pyscf.lib.cupy_helper import asarray, contract
+from gpu4pyscf.lib.cupy_helper import asarray, contract, einsum
 from gpu4pyscf.pbc.grad import kuks as kuks_grad
 from gpu4pyscf.pbc.dft.krkspu import reference_mol, _make_minao_lo
 from gpu4pyscf.pbc.grad.krkspu import generate_first_order_local_orbitals
@@ -105,7 +105,7 @@ class Gradients(kuks_grad.Gradients):
                     sc1_sub = SC1[:, :, idx_arr]
                     sc_sub = SC_k[:, idx_arr]
                     
-                    term = cp.einsum('pq, xqi, pi -> x', P_tot, sc1_sub, sc_sub.conj())
+                    term = einsum('pq, xqi, pi -> x', P_tot, sc1_sub, sc_sub.conj())
                     dE_c[atm_id] += w_k * 2.0 * vc * term.real
                     
                     constraint_idx += 1
@@ -119,7 +119,7 @@ class Gradients(kuks_grad.Gradients):
                     sc1_sub = SC1[:, :, idx_arr]
                     sc_sub = SC_k[:, idx_arr]
                     
-                    term = cp.einsum('pq, xqi, pi -> x', P_spin, sc1_sub, sc_sub.conj())
+                    term = einsum('pq, xqi, pi -> x', P_spin, sc1_sub, sc_sub.conj())
                     dE_c[atm_id] += w_k * 2.0 * vc * term.real
                     
                     constraint_idx += 1

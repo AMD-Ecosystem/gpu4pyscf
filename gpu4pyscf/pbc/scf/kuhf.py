@@ -34,6 +34,7 @@ from gpu4pyscf.pbc.scf.j_engine import PBCJMatrixOpt
 from gpu4pyscf.lib import logger, utils
 from gpu4pyscf.lib.cupy_helper import (
     return_cupy_array, contract, tag_array, sandwich_dot, asarray)
+from gpu4pyscf.lib.cupy_helper import einsum
 
 
 def make_rdm1(mo_coeff_kpts, mo_occ_kpts, **kwargs):
@@ -192,8 +193,8 @@ def energy_elec(mf, dm_kpts=None, h1e_kpts=None, vhf_kpts=None):
         vhf_kpts = mf.get_veff(mf.cell, dm_kpts)
 
     nkpts = len(h1e_kpts)
-    e1 = 1./nkpts * cp.einsum('skij,kji->', dm_kpts, h1e_kpts).get()
-    e2 = 1./nkpts * cp.einsum('skij,skji->', dm_kpts, vhf_kpts).get() * 0.5
+    e1 = 1./nkpts * einsum('skij,kji->', dm_kpts, h1e_kpts).get()
+    e2 = 1./nkpts * einsum('skij,skji->', dm_kpts, vhf_kpts).get() * 0.5
     ecoul = vhf_kpts.ecoul
     exx = e2 - ecoul
     mf.scf_summary['e1'] = e1.real
@@ -297,7 +298,7 @@ class KUHF(khf.KSCF):
 
         if s1e is None:
             s1e = self.get_ovlp(cell)
-        ne = cp.einsum('xkij,kji->x', cp.asarray(dm), s1e).real.get()
+        ne = einsum('xkij,kji->x', cp.asarray(dm), s1e).real.get()
         nelec = self.nelec
         if any(abs(ne - nelec) > 0.01*nkpts):
             logger.debug(self, 'Big error detected in the electron number '
@@ -462,8 +463,8 @@ def _get_veff(mf, cell=None, dm_kpts=None, dm_last=None, vhf_last=None,
         if not with_ecoul:
             return None
         if vj.ndim == 2:
-            return cp.einsum('nij,ji->', dm_kpts, vj).real.get() * .5
-        return cp.einsum('nKij,Kji->', dm_kpts, vj).real.get() * .5
+            return einsum('nij,ji->', dm_kpts, vj).real.get() * .5
+        return einsum('nKij,Kji->', dm_kpts, vj).real.get() * .5
 
     j_engine = None
     if with_j:

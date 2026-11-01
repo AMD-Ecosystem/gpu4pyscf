@@ -45,6 +45,7 @@ from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.cupy_helper import (
     contract, transpose_sum, ndarray, asarray, tag_array, load_library, absmax,
     get_avail_mem, vec_dot, kernel_source)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.lib.utils import nearest_power2
 from gpu4pyscf.__config__ import props as gpu_specs
 from gpu4pyscf.lib import multi_gpu
@@ -2186,7 +2187,7 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
                 dm_sc = None
 
             # rho1 has been scaled by (ngrids/cell.vol)
-            wv = cp.einsum('xg,xyg->yg', rho1, fxc).reshape(nvar, *mesh)
+            wv = einsum('xg,xyg->yg', rho1, fxc).reshape(nvar, *mesh)
             rho1 = None
 
             if with_j:
@@ -2253,7 +2254,7 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
             if dm_sc.nbytes * 10 > mem:
                 dm_sc = None
 
-            wv = cp.einsum('axg,axbyg->byg', rho1, fxc).reshape(2, nvar, *mesh)
+            wv = einsum('axg,axbyg->byg', rho1, fxc).reshape(2, nvar, *mesh)
             rho1 = None
 
             coulomb_a, coulomb_b = rhoG, rhoGb

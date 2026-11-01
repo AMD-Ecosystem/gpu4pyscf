@@ -24,6 +24,7 @@ from gpu4pyscf.fci import direct_spin1 as gpu_direct_spin1
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib import utils
 from gpu4pyscf.scf import hf
+from gpu4pyscf.lib.cupy_helper import einsum
 
 
 def h1e_for_cas(casci, mo_coeff=None, ncas=None, ncore=None, hcore=None,
@@ -51,8 +52,8 @@ def h1e_for_cas(casci, mo_coeff=None, ncas=None, ncore=None, hcore=None,
     else:
         core_dm = cupy.dot(mo_core, mo_core.conj().T) * 2
         corevhf = cupy.asarray(casci.get_veff(casci.mol, core_dm))
-        energy_core += float(cupy.einsum('ij,ji', core_dm, hcore).real.get())
-        energy_core += float(cupy.einsum('ij,ji', core_dm, corevhf).real.get()) * .5
+        energy_core += float(einsum('ij,ji', core_dm, hcore).real.get())
+        energy_core += float(einsum('ij,ji', core_dm, corevhf).real.get()) * .5
 
     h1eff = reduce(cupy.dot, (mo_cas.conj().T, hcore+corevhf, mo_cas))
     out = h1eff.get(), float(energy_core)

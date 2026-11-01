@@ -26,6 +26,7 @@ from gpu4pyscf.pbc.df import fft
 from gpu4pyscf.pbc.scf import rsjk
 from gpu4pyscf.pbc.tools.pbc import probe_charge_sr_coulomb
 from gpu4pyscf.pbc.df import aft, aft_jk
+from gpu4pyscf.lib.cupy_helper import einsum
 
 def _check_gradient(grad, cell, eval_energy, disp=1e-4, tol=1e-7):
     atom_coords = cell.atom_coords()
@@ -477,13 +478,13 @@ def test_ejk_sr_derivatives_gamma_point():
         vj = fft.FFTDF(cell1).get_jk(dm, hermi=1, with_k=False)[0]
         cell1.omega = -omega
         _, vk = fft.FFTDF(cell1).get_jk(dm, hermi=1, exxdiv=None, with_j=False)
-        return cp.einsum('ij,ji->', vj-.5*vk, cp.asarray(dm)).real * .5
+        return einsum('ij,ji->', vj-.5*vk, cp.asarray(dm)).real * .5
     _check_strain(ejk[-3:], cell, eval_ejk, tol=1e-6)
 
     def eval_ejk(cell1):
         cell1.omega = -omega
         _, vk = fft.FFTDF(cell1).get_jk(dm, hermi=1, exxdiv=None, with_j=False)
-        return cp.einsum('ij,ji->', vk, dm).real * -.5 * .5
+        return einsum('ij,ji->', vk, dm).real * -.5 * .5
     _check_strain(ek[-3:], cell, eval_ejk, tol=2e-6)
 
 def test_ejk_sr_derivatives_kpts():
@@ -532,7 +533,7 @@ def test_ejk_sr_derivatives_kpts():
         nkpts = len(kpts1)
         _, vk = fft.FFTDF(cell1, kpts=kpts1).get_jk(
             dm, hermi=1, kpts=kpts1, exxdiv=exxdiv, with_j=False)
-        return cp.einsum('kij,kji->', vk, dm).real *-.5 * .5 / nkpts
+        return einsum('kij,kji->', vk, dm).real *-.5 * .5 / nkpts
     _check_strain(ejk[-3:], cell, eval_ejk, tol=1e-6)
 
 def test_ejk_ip1_per_atom_gamma_point():
@@ -609,7 +610,7 @@ def test_ejk_ip1_per_atom_kpts():
         with_rsjk = rsjk.PBCJKMatrixOpt(cell, 0.7).build()
         vj = rsjk.get_j(cell, dm, 1, kpts, vhfopt=with_rsjk)
         vk = rsjk.get_k(cell, dm, 1, kpts, vhfopt=with_rsjk)
-        return cp.einsum('kpq,kqp->', vj-vk*.5, dm).real.get() / (2*nkpts)
+        return einsum('kpq,kqp->', vj-vk*.5, dm).real.get() / (2*nkpts)
     _check_gradient(ejk, cell, eval_ejk)
 
     vj, vk = fft_cpu.FFTDF(cell, kpts=kpts).get_jk_e1(dm, kpts=kpts, exxdiv=None)
@@ -894,7 +895,7 @@ def test_ejk_strain_deriv_kpts():
         kpts1 = cell1.make_kpts(kmesh)
         nkpts = len(kpts1)
         vj, vk = fft.FFTDF(cell1, kpts=kpts1).get_jk(dm_kpts, hermi=1, kpts=kpts1)
-        return cp.einsum('kij,kji->', vj-vk*.5, dm_kpts).real * .5 / nkpts
+        return einsum('kij,kji->', vj-vk*.5, dm_kpts).real * .5 / nkpts
     _check_gradient(grad, cell, eval_ejk)
     _check_strain(sigma, cell, eval_ejk, tol=1e-6)
 
@@ -917,7 +918,7 @@ def test_ejk_strain_deriv_kpts():
         nkpts = len(kpts1)
         vj, vk = fft.FFTDF(cell1, kpts=kpts1).get_jk(dm1, hermi=1, kpts=kpts1, exxdiv='ewald')
         vj = vj[0] + vj[1]
-        return cp.einsum('skij,skji->', vj-vk, dm1).real * .5 / nkpts
+        return einsum('skij,skji->', vj-vk, dm1).real * .5 / nkpts
 
     _check_gradient(grad, cell, eval_ejk)
     _check_strain(sigma, cell, eval_ejk, tol=1e-6)
@@ -959,7 +960,7 @@ def test_ejk_strain_deriv_kpts():
         mydf = aft.AFTDF(cell1)
         vk = aft_jk.get_k_kpts(mydf, dm, exxdiv=exxdiv)
         vk -= aft_jk.get_k_kpts(mydf, dm, omega=omega, exxdiv=exxdiv)
-        return cp.einsum('ij,ji->', vk, dm).real * -.25 * sr_factor
+        return einsum('ij,ji->', vk, dm).real * -.25 * sr_factor
 
     _check_gradient(grad, cell, eval_ejk)
     _check_strain(sigma, cell, eval_ejk, tol=1e-6)
@@ -979,11 +980,11 @@ def test_ejk_strain_deriv_kpts():
         mydf = aft.AFTDF(cell1)
         refj = aft_jk.get_jk(mydf, dm, with_k=False)[0]
         refk = aft_jk.get_k_kpts(mydf, dm, omega=omega, exxdiv=exxdiv, lr_factor=lr_factor, sr_factor=sr_factor)
-        e1 = cp.einsum('ij,ji->', refj-refk*.5, dm) * .5
+        e1 = einsum('ij,ji->', refj-refk*.5, dm) * .5
         mydf = aft.AFTDF(cell2)
         refj = aft_jk.get_jk(mydf, dm, with_k=False)[0]
         refk = aft_jk.get_k_kpts(mydf, dm, omega=omega, exxdiv=exxdiv, lr_factor=lr_factor, sr_factor=sr_factor)
-        e2 = cp.einsum('ij,ji->', refj-refk*.5, dm) * .5
+        e2 = einsum('ij,ji->', refj-refk*.5, dm) * .5
         assert abs(sigma[i,j] - (e1-e2)/2e-3) < 1e-5
 
     # exxdiv=None, omega != 0, lr != 0, sr == 0

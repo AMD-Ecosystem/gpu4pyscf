@@ -39,6 +39,7 @@ from gpu4pyscf.gto.mole import SortedGTO
 from gpu4pyscf.lib import logger, utils
 from gpu4pyscf.lib.cupy_helper import (return_cupy_array, contract, unpack_tril,
                                        get_avail_mem, asarray, ndarray)
+from gpu4pyscf.lib.cupy_helper import einsum
 
 KE_SCALING = aft_cpu.KE_SCALING
 
@@ -65,7 +66,7 @@ def _get_pp_loc_part1(mydf, kpts=None, with_pseudo=True):
 
     if with_pseudo:
         vpplocG = pp_int.get_gth_vlocG_part1(cell, Gv)
-        vpplocG = -np.einsum('ij,ij->j', get_SI(cell, mesh=mesh), vpplocG)
+        vpplocG = -einsum('ij,ij->j', get_SI(cell, mesh=mesh), vpplocG)
         vpplocG = cp.asarray(vpplocG)
     else:
         fakenuc = _fake_nuc(cell, with_pseudo=with_pseudo)

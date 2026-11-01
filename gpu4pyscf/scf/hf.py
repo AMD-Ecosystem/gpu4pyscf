@@ -31,6 +31,7 @@ from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.cupy_helper import (
     eigh, tag_array, return_cupy_array, cond, asarray, get_avail_mem,
     block_diag, sandwich_dot, stack_with_padding)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.scf import diis, jk, j_engine
 from . import dispersion
 from gpu4pyscf.scf.smearing import smearing
@@ -116,11 +117,11 @@ def _trace_ecoul(vj, ddm, dm_last=None, vhf_last=None):
             # Ecoul = 1/2 (dm_last+ddm)*J[dm_last+ddm]
             # = 1/2 (dm_last*J[dm_last] + 2 dm_last*J[ddm] + ddm*J[ddm])
             # = Ecoul_last + dm_last*J[ddm] + 1/2 ddm*J[ddm]
-            ecoul = float(cupy.einsum('ij,ji->', dm_last, vj).real.get())
-            ecoul += float(cupy.einsum('ij,ji->', ddm, vj).real.get()) * .5
+            ecoul = float(einsum('ij,ji->', dm_last, vj).real.get())
+            ecoul += float(einsum('ij,ji->', ddm, vj).real.get()) * .5
             ecoul += vhf_last.ecoul
     elif ddm.ndim == 2:
-        ecoul = float(cupy.einsum('ij,ji->', ddm, vj).real.get()) * .5
+        ecoul = float(einsum('ij,ji->', ddm, vj).real.get()) * .5
     return ecoul
 
 def get_grad(mo_coeff, mo_occ, fock_ao):
@@ -194,8 +195,8 @@ def energy_elec(mf, dm=None, h1e=None, vhf=None):
     if h1e is None: h1e = mf.get_hcore()
     if vhf is None or getattr(vhf, 'ecoul', None) is None:
         vhf = mf.get_veff(mf.mol, dm)
-    e1 = cupy.einsum('ij,ji->', h1e, dm).real.item()
-    e2 = cupy.einsum('ij,ji->', vhf, dm).real.item() * .5
+    e1 = einsum('ij,ji->', h1e, dm).real.item()
+    e2 = einsum('ij,ji->', vhf, dm).real.item() * .5
     ecoul = vhf.ecoul.real
     exx = e2 - ecoul
     mf.scf_summary['e1'] = e1

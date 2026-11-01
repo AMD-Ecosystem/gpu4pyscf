@@ -25,7 +25,7 @@ import cupy as cp
 from pyscf import lib
 from pyscf.pbc.dft import kuks as kuks_cpu
 from gpu4pyscf.lib import logger, utils
-from gpu4pyscf.lib.cupy_helper import tag_array, get_avail_mem
+from gpu4pyscf.lib.cupy_helper import tag_array, get_avail_mem, einsum
 from gpu4pyscf.pbc.scf import khf, kuhf
 from gpu4pyscf.pbc.dft import rks, krks
 from gpu4pyscf.pbc.dft import multigrid
@@ -70,11 +70,11 @@ def get_veff(ks, cell=None, dm=None, dm_last=None, vhf_last=None, hermi=1,
         vxc = vxc + vj[0] + vj[1]
         ecoul = None
         if ground_state:
-            ecoul = cp.einsum('nKij,mKji->', dm, vj).get() * .5 * weight
+            ecoul = einsum('nKij,mKji->', dm, vj).get() * .5 * weight
     if hybrid:
         vxc = vxc - vk
         if ground_state:
-            exc -= float(cp.einsum('nKij,nKji->', dm, vk).real.get()) * .5 * weight
+            exc -= float(einsum('nKij,nKji->', dm, vk).real.get()) * .5 * weight
     vxc = tag_array(vxc, ecoul=ecoul, exc=exc)
     if vj_sr is not None:
         vxc.vj = vj_sr
@@ -90,7 +90,7 @@ def energy_elec(mf, dm_kpts=None, h1e_kpts=None, vhf=None):
         vhf = mf.get_veff(mf.cell, dm_kpts)
 
     weight = 1./len(h1e_kpts)
-    e1 = weight * cp.einsum('kij,nkji->', h1e_kpts, dm_kpts).get()
+    e1 = weight * einsum('kij,nkji->', h1e_kpts, dm_kpts).get()
     ecoul = vhf.ecoul
     exc = vhf.exc.real
     e2 = ecoul + exc

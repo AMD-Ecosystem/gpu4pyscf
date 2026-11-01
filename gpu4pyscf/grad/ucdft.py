@@ -14,7 +14,7 @@
 
 import cupy as cp
 from gpu4pyscf.lib import logger
-from gpu4pyscf.lib.cupy_helper import asarray, contract
+from gpu4pyscf.lib.cupy_helper import asarray, contract, einsum
 from gpu4pyscf.grad import uks
 from gpu4pyscf.dft.rkspu import reference_mol, _make_minao_lo
 from gpu4pyscf.dft.ucdft import _get_minao_basis_indices
@@ -84,7 +84,7 @@ def get_constraint_force(mf_grad, dm):
             
             # Force = Vc * Tr( P_tot * (SC1 * SC^T + h.c.) )
             #       = 2 * Vc * Tr( P_tot * SC1 * SC^T )
-            term = cp.einsum('pq, xqi, pi -> x', P_tot, sc1_sub, sc_sub)
+            term = einsum('pq, xqi, pi -> x', P_tot, sc1_sub, sc_sub)
             dE_c[atm_id] += 2.0 * vc * term
             
             constraint_idx += 1
@@ -100,7 +100,7 @@ def get_constraint_force(mf_grad, dm):
             sc1_sub = SC1[:, :, idx_arr]
             sc_sub = SC[:, idx_arr]
             
-            term = cp.einsum('pq, xqi, pi -> x', P_spin, sc1_sub, sc_sub)
+            term = einsum('pq, xqi, pi -> x', P_spin, sc1_sub, sc_sub)
             dE_c[atm_id] += 2.0 * vc * term.real
             
             constraint_idx += 1

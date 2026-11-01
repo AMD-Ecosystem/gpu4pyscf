@@ -25,6 +25,7 @@ from gpu4pyscf.gto.ecp import get_ecp_ip
 from gpu4pyscf.lib import utils
 from gpu4pyscf.lib.cupy_helper import (
     tag_array, contract, condense, transpose_sum, get_avail_mem, ndarray)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.__config__ import props as gpu_specs
 from gpu4pyscf.df import int3c2e_bdiv
 from gpu4pyscf.lib import logger
@@ -240,7 +241,7 @@ def int1e_ipnuc(mol):
         opt, int3c2e_scheme_ip1(omega, 27), batch_size, 'fill_int3c2e_ip1', omega)
     ipnuc = 0
     for batch_id, (p0, p1) in enumerate(zip(aux_offsets[:-1], aux_offsets[1:])):
-        ipnuc += cp.einsum('xpk,k->xp', eval_ip1(batch_id), -charges[p0:p1])
+        ipnuc += einsum('xpk,k->xp', eval_ip1(batch_id), -charges[p0:p1])
 
     pair_addresses = opt.pair_and_diag_indices(cart=True, original_ao_order=False)[0]
     nao = sorted_mol.nao
@@ -442,13 +443,13 @@ def contract_h1e_dm(mol, h1e, dm, hermi=0):
     atm_id_for_ao = np.repeat(mol._bas[:,gto.ATOM_OF], dims)
 
     if dm.ndim == 2: # RHF
-        de_partial = cp.einsum('xij,ji->ix', h1e, dm).real
+        de_partial = einsum('xij,ji->ix', h1e, dm).real
         if hermi != 1:
-            de_partial += cp.einsum('xij,ij->ix', h1e, dm).real
+            de_partial += einsum('xij,ij->ix', h1e, dm).real
     else: # UHF
-        de_partial = cp.einsum('sxij,sji->ix', h1e, dm).real
+        de_partial = einsum('sxij,sji->ix', h1e, dm).real
         if hermi != 1:
-            de_partial += cp.einsum('sxij,sij->ix', h1e, dm).real
+            de_partial += einsum('sxij,sij->ix', h1e, dm).real
 
     de_partial = de_partial.get()
     de = groupby(atm_id_for_ao, de_partial, op='sum')

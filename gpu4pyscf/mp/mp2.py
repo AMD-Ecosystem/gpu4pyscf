@@ -17,14 +17,14 @@ import cupy
 from pyscf import lib
 from pyscf.mp import mp2 as mp2_cpu
 from pyscf import __config__
-from gpu4pyscf.lib.cupy_helper import tag_array, get_avail_mem
+from gpu4pyscf.lib.cupy_helper import tag_array, get_avail_mem, einsum
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib import utils
 from gpu4pyscf.scf import int4c2e
 
 WITH_T2 = getattr(__config__, 'mp_mp2_with_t2', True)
 
-_einsum = cupy.einsum
+_einsum = einsum
 def kernel(mp, mo_energy=None, mo_coeff=None, eris=None, with_t2=WITH_T2, verbose=None):
     if mo_energy is not None or mo_coeff is not None:
         # For backward compatibility.  In pyscf-1.4 or earlier, mp.frozen is

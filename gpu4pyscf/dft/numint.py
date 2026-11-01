@@ -27,6 +27,7 @@ from gpu4pyscf.lib.cupy_helper import (
     contract, get_avail_mem, load_library, add_sparse, release_gpu_stack, transpose_sum,
     grouped_dot, grouped_gemm, reduce_to_device, take_last2d, ndarray,
     batched_vec_norm2, batched_vec_dot, MEMPOOL_THRESHOLD)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.dft import xc_deriv, libxc
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.multi_gpu import lru_cache
@@ -924,7 +925,7 @@ def _nr_uks_task(ni, mol, grids, xc_code, dms, mo_coeff, mo_occ,
             for i in range(nset):
                 exc[i], vxc[i] = ni.eval_xc_eff(xc_code, rho_tot[:,i,:,:],
                                                 deriv=1, xctype=xctype, spin=1)[:2]
-            excsum = cupy.einsum('ijg,g,jg->j', rho_tot[:,:,0], weights, exc).get()
+            excsum = einsum('ijg,g,jg->j', rho_tot[:,:,0], weights, exc).get()
             wv = vxc * weights
             if xctype == 'GGA':
                 wv[:,:,0] *= .5

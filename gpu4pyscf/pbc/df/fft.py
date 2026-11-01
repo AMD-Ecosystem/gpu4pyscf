@@ -27,7 +27,7 @@ from pyscf.pbc.gto import pseudo
 from pyscf.pbc.lib.kpts_helper import is_zero
 from pyscf.pbc.lib.kpts import KPoints
 from gpu4pyscf.lib import logger, utils
-from gpu4pyscf.lib.cupy_helper import contract, asarray
+from gpu4pyscf.lib.cupy_helper import contract, asarray, einsum
 from gpu4pyscf.pbc import tools
 from gpu4pyscf.pbc.df import fft_jk, aft
 from gpu4pyscf.pbc.df.aft import _check_kpts, get_SI, _get_ZSI
@@ -86,7 +86,7 @@ def get_pp(mydf, kpts=None):
     Gv = cell.get_Gv(mesh)
     SI = get_SI(cell, mesh=mesh)
     vpplocG = pseudo.get_vlocG(cell, Gv)
-    vpplocG = -cp.einsum('ij,ij->j', SI, cp.asarray(vpplocG))
+    vpplocG = -einsum('ij,ij->j', SI, cp.asarray(vpplocG))
     # vpploc evaluated in real-space
     vpplocR = tools.ifft(vpplocG, mesh).real
 

@@ -25,6 +25,7 @@ from gpu4pyscf.dft.numint import NumInt
 from gpu4pyscf import dft
 from gpu4pyscf.dft import gen_grid
 from gpu4pyscf.dft import xc_deriv
+from gpu4pyscf.lib.cupy_helper import einsum
 try:
     from gpu4pyscf.dispersion import dftd3, dftd4
 except ImportError:
@@ -283,7 +284,7 @@ H   1.7   -2.0   0.4''',
         ao = cupy.random.rand(1, 3, 256)
         wv = cupy.random.rand(1, 256)
         out = cupy.ones(6 * 256)
-        ref = cupy.einsum('nip,np->ip', ao, wv)
+        ref = einsum('nip,np->ip', ao, wv)
         assert abs(ref - numint._scale_ao(ao, wv)).max() < 1e-12
         assert abs(ref - numint._scale_ao(ao, wv, out=out)).max() < 1e-12
         assert abs(ref - numint._scale_ao(ao+0j, wv, out=out)).max() < 1e-12

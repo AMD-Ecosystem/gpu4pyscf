@@ -21,7 +21,7 @@ import numpy as np
 import cupy as cp
 from pyscf.pbc import gto
 from pyscf.pbc.lib.kpts_helper import is_zero
-from gpu4pyscf.lib.cupy_helper import asarray, contract
+from gpu4pyscf.lib.cupy_helper import asarray, contract, einsum
 from gpu4pyscf.pbc.dft.krkspu import _set_U, _make_minao_lo, reference_mol
 from gpu4pyscf.pbc.grad import krks as krks_grad
 from gpu4pyscf.pbc.grad.rhf import _finite_diff_cells
@@ -143,7 +143,7 @@ def _hubbard_U_derivatives(mf, dm=None, kpts=None):
                 # The factor two accounts for P1 + P1.H; energy has a factor 1/2.
                 response += (val / nkpts) * (
                     cp.einsum('xii->x', P1).real
-                    - occupation_factor * cp.einsum('xij,ji->x', P1, P0).real)
+                    - occupation_factor * einsum('xij,ji->x', P1, P0).real)
         return response
 
     ovlp1 = int1e.int1e_ipovlp(cell, kpts)

@@ -22,6 +22,7 @@ from pyscf.dft import uks as uks_cpu
 from gpu4pyscf.dft import rks, uks
 from gpu4pyscf.properties import polarizability
 import pytest
+from gpu4pyscf.lib.cupy_helper import einsum
 
 try:
     from pyscf.prop import polarizability as polar
@@ -99,7 +100,7 @@ def numerical_polarizability(mf, delta_E):
     dipole_integral = cp.asarray(mol.intor('cint1e_r_sph', comp=3))
     def apply_electric_field(mf, E):
         E = cp.asarray(E)
-        delta_Hcore = cp.einsum('d,dij->ij', E, dipole_integral)
+        delta_Hcore = einsum('d,dij->ij', E, dipole_integral)
 
         mf.get_hcore = lambda *args: Hcore + delta_Hcore
         mf.kernel()

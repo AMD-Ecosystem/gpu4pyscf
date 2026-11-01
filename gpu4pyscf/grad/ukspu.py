@@ -23,7 +23,7 @@ from gpu4pyscf.dft.ukspu import UKSpU
 from gpu4pyscf.dft.rkspu import _set_U, _make_minao_lo, reference_mol
 from gpu4pyscf.grad import uks as uks_grad
 from gpu4pyscf.grad.rkspu import generate_first_order_local_orbitals
-from gpu4pyscf.lib.cupy_helper import asarray, contract
+from gpu4pyscf.lib.cupy_helper import asarray, contract, einsum
 
 def _hubbard_U_deriv1(mf, dm=None):
     assert mf.alpha is None
@@ -64,7 +64,7 @@ def _hubbard_U_deriv1(mf, dm=None):
                 P1 = dm_deriv1[:,i0:i1,i0:i1]
                 dE_U[atm_id] += (val * 0.5) * (
                     cp.einsum('xii->x', P1).real * 2 # *2 for P1+P1.T
-                    - cp.einsum('xij,ji->x', P1, P0).real * 4)
+                    - einsum('xij,ji->x', P1, P0).real * 4)
     return dE_U.get()
 
 class Gradients(uks_grad.Gradients):

@@ -20,7 +20,7 @@ from pyscf.pbc import gto, tools
 from pyscf.pbc.df import FFTDF
 from pyscf.pbc.df.df import make_auxcell
 from pyscf.pbc.df.rsdf_builder import _gaussian_int
-from gpu4pyscf.lib.cupy_helper import tag_array, contract
+from gpu4pyscf.lib.cupy_helper import tag_array, contract, einsum
 from gpu4pyscf.pbc.df import int3c2e
 from gpu4pyscf.pbc.df.grad import rhf, uhf, krhf, kuhf
 from gpu4pyscf.pbc.df.int2c2e import sr_int2c2e
@@ -97,7 +97,7 @@ def _ewald_exx_energy(cell, dm, kpts, k_factor, unrestricted=False,
         k_dm = contract('kpq,kqr->kpr', dm, s0)
         k_dm = contract('kpr,krs->kps', k_dm, dm)
         prefactor = -.25
-    ek_G0 = cp.einsum('kij,kji->', s0, k_dm).real.get()
+    ek_G0 = einsum('kij,kji->', s0, k_dm).real.get()
     return (prefactor * k_factor / nkpts *
             madelung(cell, kpts, omega=omega) * ek_G0)
 
@@ -126,7 +126,7 @@ def test_ej_derivatives_gamma_point_without_long_range():
         # Match the builder's zero-average Coulomb convention at G=0.
         aux_chg = cp.asarray(_gaussian_int(ac))
         g0 = np.pi / omega**2 / c.vol
-        charge = cp.einsum('ij,ji->', dm, cp.asarray(c.pbc_intor('int1e_ovlp')))
+        charge = einsum('ij,ji->', dm, cp.asarray(c.pbc_intor('int1e_ovlp')))
         jaux -= g0 * charge * aux_chg
         j2c -= g0 * aux_chg[:,None] * aux_chg
         return float(cp.linalg.solve(j2c, jaux).dot(jaux).get()) * .5
@@ -159,7 +159,7 @@ def test_ej_derivatives_gamma_point_with_long_range():
     disp = 1e-4
     def eval_j(c, ac):
         cderi = rsdf_builder.build_cderi(c, ac)[0][0,0]
-        jaux = cp.einsum('rpq,qp->r', cderi, dm)
+        jaux = einsum('rpq,qp->r', cderi, dm)
         return float(jaux.dot(jaux).get()) * .5
 
     _check_gradient(grad, cell, auxcell, eval_j)
@@ -288,7 +288,7 @@ def test_ej_derivatives_kpts_without_long_range():
         aux_chg = cp.asarray(_gaussian_int(ac))
         g0 = np.pi / omega**2 / c.vol
         overlap = cp.asarray(c.pbc_intor('int1e_ovlp', kpts=kpts))
-        charge = cp.einsum('kij,kji->', dm, overlap).real / len(kpts)
+        charge = einsum('kij,kji->', dm, overlap).real / len(kpts)
         jaux -= g0 * charge * aux_chg
         j2c -= g0 * aux_chg[:,None] * aux_chg
         return float(cp.linalg.solve(j2c, jaux).dot(jaux).get()) * .5
@@ -322,7 +322,7 @@ def test_ej_derivatives_kpts_with_long_range():
         cderi = rsdf_builder.build_cderi(c, ac, kpts, kmesh, j_only=True)[0]
         jaux = 0
         for ki in range(nkpts):
-            jaux += cp.einsum('pij,ji->p', cderi[ki,ki], dm[ki])
+            jaux += einsum('pij,ji->p', cderi[ki,ki], dm[ki])
         ref = .5/nkpts**2 * jaux.dot(jaux).real.get()
         return ref
 
@@ -375,7 +375,7 @@ def test_ejk_derivatives_kpts_without_long_range():
         cderi = rsdf_builder.build_cderi(c, ac, kpts=kpts, kmesh=kmesh, omega=omega)[0]
         jaux = 0
         for ki in range(nkpts):
-            jaux += cp.einsum('pij,ji->p', cderi[ki,ki], dm[ki])
+            jaux += einsum('pij,ji->p', cderi[ki,ki], dm[ki])
         ref = j_factor * .5/nkpts**2 * jaux.dot(jaux).real.get()
         ek = 0
         for ki in range(nkpts):
@@ -433,7 +433,7 @@ def test_ejk_derivatives_kpts_with_long_range():
         cderi = rsdf_builder.build_cderi(c, ac, kpts=kpts, kmesh=kmesh)[0]
         jaux = 0
         for ki in range(nkpts):
-            jaux += cp.einsum('pij,ji->p', cderi[ki,ki], dm[ki])
+            jaux += einsum('pij,ji->p', cderi[ki,ki], dm[ki])
         ref = j_factor * .5/nkpts**2 * jaux.dot(jaux).real.get()
         ek = 0
         for ki in range(nkpts):
@@ -503,7 +503,7 @@ def test_ejk_derivatives_kpts_with_long_range1():
         cderi = rsdf_builder.build_cderi(c, ac, kpts=kpts, kmesh=kmesh)[0]
         jaux = 0
         for ki in range(nkpts):
-            jaux += cp.einsum('pij,ji->p', cderi[ki,ki], dm[ki])
+            jaux += einsum('pij,ji->p', cderi[ki,ki], dm[ki])
         ref = j_factor * .5/nkpts**2 * jaux.dot(jaux).real.get()
         ek = 0
         for ki in range(nkpts):
@@ -516,7 +516,7 @@ def test_ejk_derivatives_kpts_with_long_range1():
                     cderi_ji = cderi[kj,ki]
                 else:
                     cderi_ji = cderi[ki,kj].transpose(0,2,1).conj()
-                ek += cp.einsum('pij,jk,li,pkl->', cderi_ij, dm[kj], dm[ki], cderi_ji)
+                ek += einsum('pij,jk,li,pkl->', cderi_ij, dm[kj], dm[ki], cderi_ji)
         ek = float(ek.real.get())
         ref -= ek * .25 / nkpts**2 * k_factor
         return ref
@@ -644,7 +644,7 @@ def test_uhf_ejk_derivatives_kpts_without_long_range():
         cderi = rsdf_builder.build_cderi(c, ac, kpts=kpts, kmesh=kmesh, omega=omega)[0]
         jaux = 0
         for ki in range(nkpts):
-            jaux += cp.einsum('pij,ji->p', cderi[ki,ki], dm_sf[ki])
+            jaux += einsum('pij,ji->p', cderi[ki,ki], dm_sf[ki])
         ref = j_factor * .5/nkpts**2 * jaux.dot(jaux).real.get()
         ek = 0
         for ki in range(nkpts):
@@ -705,7 +705,7 @@ def test_uhf_ejk_derivatives_kpts_with_long_range():
         cderi = rsdf_builder.build_cderi(c, ac, kpts=kpts, kmesh=kmesh)[0]
         jaux = 0
         for ki in range(nkpts):
-            jaux += cp.einsum('pij,ji->p', cderi[ki,ki], dm_sf[ki])
+            jaux += einsum('pij,ji->p', cderi[ki,ki], dm_sf[ki])
         ref = j_factor * .5/nkpts**2 * jaux.dot(jaux).real.get()
         ek = 0
         for ki in range(nkpts):
@@ -774,7 +774,7 @@ def test_uhf_ejk_derivatives_kpts_with_long_range1():
         cderi = rsdf_builder.build_cderi(c, ac, kpts=kpts, kmesh=kmesh)[0]
         jaux = 0
         for ki in range(nkpts):
-            jaux += cp.einsum('pij,ji->p', cderi[ki,ki], dm_sf[ki])
+            jaux += einsum('pij,ji->p', cderi[ki,ki], dm_sf[ki])
         ref = j_factor * .5/nkpts**2 * jaux.dot(jaux).real.get()
 
         ek = 0
@@ -788,7 +788,7 @@ def test_uhf_ejk_derivatives_kpts_with_long_range1():
                     cderi_ji = cderi[kj,ki]
                 else:
                     cderi_ji = cderi[ki,kj].transpose(0,2,1).conj()
-                ek += cp.einsum('pij,sjk,sli,pkl->', cderi_ij, dm[:,kj], dm[:,ki], cderi_ji)
+                ek += einsum('pij,sjk,sli,pkl->', cderi_ij, dm[:,kj], dm[:,ki], cderi_ji)
         ek = float(ek.real.get())
         ref -= ek * .5 / nkpts**2 * k_factor
         return ref
@@ -818,11 +818,11 @@ def _gamma_df_energy(cell, auxcell, dm, omega, k_factor):
     metric, negative, _ = rsdf_builder.decompose_j2c(j2c, prefer_ed=True)
     assert negative is None
     cderi = contract('rp,rij->pij', metric, j3c)
-    rho = cp.einsum('rij,ji->r', cderi, dm)
+    rho = einsum('rij,ji->r', cderi, dm)
     energy = .5 * rho.dot(rho)
     if k_factor:
         ld = cp.einsum('rij,jk->rik', cderi, dm)
-        energy -= .25 * k_factor * cp.einsum('rij,rji->', ld, ld)
+        energy -= .25 * k_factor * einsum('rij,rji->', ld, ld)
     return float(energy.get())
 
 
@@ -925,7 +925,7 @@ def test_kpts_diffuse_only_coulomb(omega):
     def energy(c, ac):
         cderi = rsdf_builder.build_cderi(
             c, ac, c.make_kpts(kmesh), kmesh, j_only=True, omega=omega)[0]
-        rho = sum(cp.einsum('rij,ji->r', cderi[k,k], dm[k])
+        rho = sum(einsum('rij,ji->r', cderi[k,k], dm[k])
                   for k in range(nkpts)) / nkpts
         return float((.5 * rho.dot(rho)).real.get())
 

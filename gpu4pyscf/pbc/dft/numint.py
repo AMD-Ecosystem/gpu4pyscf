@@ -35,6 +35,7 @@ from gpu4pyscf.scf.jk import _nearest_power2, _scale_sp_ctr_coeff
 from gpu4pyscf.dft import numint
 from gpu4pyscf.lib.cupy_helper import (
     transpose_sum, contract, get_avail_mem, asarray, ndarray)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.lib import utils
 from gpu4pyscf import __config__
 
@@ -556,7 +557,7 @@ def nr_rks_fxc(ni, cell, grids, xc_code, dm0, dms, hermi=0, fxc=None, kpts=None,
                 if xctype == 'LDA':
                     wv = cp.einsum('g,yg->yg', rho1, wfxc[0])
                 else:
-                    wv = cp.einsum('xg,xyg->yg', rho1, wfxc)
+                    wv = einsum('xg,xyg->yg', rho1, wfxc)
                 ni._vxc_mat(ao_ks, wv, xctype, v_hermi, vmat[i])
         if v_hermi == 1:
             vmat = transpose_sum(vmat.reshape(-1,nao,nao))
@@ -629,8 +630,8 @@ def nr_uks_fxc(ni, cell, grids, xc_code, dm0, dms, hermi=0, fxc=None, kpts=None,
                 if xctype == 'LDA':
                     wv = rho1a * wfxc[0,0] + rho1b * wfxc[1,0]
                 else:
-                    wv  = cp.einsum('xg,xbyg->byg', rho1a, wfxc[0])
-                    wv += cp.einsum('xg,xbyg->byg', rho1b, wfxc[1])
+                    wv  = einsum('xg,xbyg->byg', rho1a, wfxc[0])
+                    wv += einsum('xg,xbyg->byg', rho1b, wfxc[1])
                 ni._vxc_mat(ao_ks, wv[0], xctype, v_hermi, vmat[0,i])
                 ni._vxc_mat(ao_ks, wv[1], xctype, v_hermi, vmat[1,i])
         if v_hermi == 1:

@@ -40,6 +40,7 @@ from gpu4pyscf.pbc.tools import pbc as pbc_tools
 import gpu4pyscf.pbc.dft.multigrid as multigrid_v1
 from gpu4pyscf.lib.cupy_helper import (
     contract, tag_array, load_library, get_avail_mem, asarray)
+from gpu4pyscf.lib.cupy_helper import einsum
 
 __all__ = ['MultiGridNumInt']
 
@@ -1569,10 +1570,10 @@ def nr_rks(ni, cell, grids, xc_code, dm_kpts, relativity=0, hermi=1,
     if xc_type == "LDA" or xc_type == 'HF':
         pass
     elif xc_type == "GGA":
-        xc_for_fock[0] -= cp.einsum("gp, pg -> p", xc_for_fock[1:4], Gv) * 1j
+        xc_for_fock[0] -= einsum("gp, pg -> p", xc_for_fock[1:4], Gv) * 1j
         xc_for_fock = xc_for_fock[0].reshape((-1, ngrids))
     elif xc_type == "MGGA":
-        xc_for_fock[0] -= cp.einsum("gp, pg -> p", xc_for_fock[1:4], Gv) * 1j
+        xc_for_fock[0] -= einsum("gp, pg -> p", xc_for_fock[1:4], Gv) * 1j
         xc_for_fock = cp.concatenate([
             xc_for_fock[0].reshape((-1, ngrids)),
             xc_for_fock[4].reshape((-1, ngrids)),
@@ -1920,8 +1921,8 @@ def _rks_exc_strain_deriv(ni, xc_code, dm_kpts, kpts=None, with_j=False, with_nu
 
     weight_0, weight_1 = _get_weight_strain_derivatives(cell, grids)
     exc, vxc = ni.eval_xc_eff(xc_code, rho0, 1, xctype=xctype, spin=0)[:2]
-    out  = cp.einsum('xyng,ng->xy', rho1, vxc).real.get() * weight_0
-    out += cp.einsum('g,g->', rho0[0], exc.ravel()).real.get() * weight_1
+    out  = einsum('xyng,ng->xy', rho1, vxc).real.get() * weight_0
+    out += einsum('g,g->', rho0[0], exc.ravel()).real.get() * weight_1
 
     out += _contract_coulomb_and_nuc(cell, mesh, dm_kpts, kpts, rho0[0],
                                      rho1[:,:,0], grids, with_j, with_nuc)
@@ -1983,10 +1984,10 @@ def _uks_exc_strain_deriv(ni, xc_code, dm_kpts, kpts=None, with_j=False, with_nu
 
     weight_0, weight_1 = _get_weight_strain_derivatives(cell, grids)
     exc, vxc = ni.eval_xc_eff(xc_code, rho0, 1, xctype=xctype, spin=1)[:2]
-    out = cp.einsum('xysng,sng->xy', rho1, vxc).real.get() * weight_0
+    out = einsum('xysng,sng->xy', rho1, vxc).real.get() * weight_0
     rho0_sf = rho0[:,0].sum(axis=0)
     rho1_sf = rho1[:,:,:,0].sum(axis=2)
-    out += cp.einsum('g,g->', rho0_sf, exc.ravel()).real.get() * weight_1
+    out += einsum('g,g->', rho0_sf, exc.ravel()).real.get() * weight_1
 
     dm_sf = dm_kpts[0] + dm_kpts[1]
     out += _contract_coulomb_and_nuc(cell, mesh, dm_sf, kpts, rho0_sf,

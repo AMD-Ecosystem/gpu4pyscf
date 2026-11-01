@@ -21,7 +21,7 @@ from pyscf.pbc.df import fft as fft_cpu
 from pyscf.pbc import dft as dft_cpu
 from gpu4pyscf.pbc.dft import gen_grid
 from gpu4pyscf.pbc.dft import numint
-from gpu4pyscf.lib.cupy_helper import contract
+from gpu4pyscf.lib.cupy_helper import contract, einsum
 
 
 def setUpModule():
@@ -483,27 +483,27 @@ S
         grids.mesh = [11]*3
         kni = numint.KNumInt()
         dat = kni.cache_xc_kernel1(cell_he, grids, xc, cp.array(dm_he[:1]))
-        dat = cp.einsum('xg,xyg->', dat[0], dat[2])
+        dat = einsum('xg,xyg->', dat[0], dat[2])
         self.assertAlmostEqual(dat.get(), ref)
 
         ref = ni_cpu.cache_xc_kernel1(cell_he, grids_cpu, xc, dm_he, spin=1)
         ref = np.einsum('ag,axbyg->', ref[0], ref[2])
         dat = kni.cache_xc_kernel1(cell_he, grids, xc, cp.array(dm_he), spin=1)
-        dat = cp.einsum('axg,axbyg->', dat[0], dat[2])
+        dat = einsum('axg,axbyg->', dat[0], dat[2])
         self.assertAlmostEqual(dat.get(), ref)
 
         xc = 'm06,'
         ref = kni_cpu.cache_xc_kernel1(cell_he, grids_cpu, xc, dm_he, kpts=kpts, spin=1)
         ref = np.einsum('axg,axbyg->', ref[0], ref[2])
         dat = kni.cache_xc_kernel1(cell_he, grids, xc, cp.array(dm_he), kpts=kpts, spin=1)
-        dat = cp.einsum('axg,axbyg->', dat[0], dat[2])
+        dat = einsum('axg,axbyg->', dat[0], dat[2])
         self.assertAlmostEqual(dat.get(), ref)
 
         xc = 'pbe,'
         ref = kni_cpu.cache_xc_kernel1(cell_he, grids_cpu, xc, np.array([dm_he]*2), kpts=kpts, spin=1)
         ref = np.einsum('axg,axbyg->', ref[0], ref[2])
         dat = kni.cache_xc_kernel1(cell_he, grids, xc, cp.array([dm_he]*2), kpts=kpts, spin=1)
-        dat = cp.einsum('axg,axbyg->', dat[0], dat[2])
+        dat = einsum('axg,axbyg->', dat[0], dat[2])
         self.assertAlmostEqual(dat.get(), ref)
 
     def test_nr_rks_fxc(self):

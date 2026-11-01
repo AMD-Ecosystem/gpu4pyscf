@@ -26,7 +26,7 @@ from gpu4pyscf.tdscf._lr_eig import _eigs_cmplx2real, davidson_nosym1
 from gpu4pyscf import scf
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib import utils
-from gpu4pyscf.lib.cupy_helper import contract, asarray
+from gpu4pyscf.lib.cupy_helper import contract, asarray, einsum
 from gpu4pyscf.tdscf._uhf_resp_sf import gen_uhf_response_sf, cache_xc_kernel_sf
 from gpu4pyscf.gto.int3c1e import int1e_grids
 from gpu4pyscf.tdscf import rhf as tdhf_gpu
@@ -769,13 +769,13 @@ class TDBase(tdhf_gpu.TDBase):
 
         ints_a = cp.einsum('...pq,pi,qj->...ij', ints, orbo_a.conj(), orbv_a)
         ints_b = cp.einsum('...pq,pi,qj->...ij', ints, orbo_b.conj(), orbv_b)
-        pol = [(cp.einsum('...ij,ij->...', ints_a, x[0]).get() +
-                cp.einsum('...ij,ij->...', ints_b, x[1]).get()) for x,y in xy]
+        pol = [(einsum('...ij,ij->...', ints_a, x[0]).get() +
+                einsum('...ij,ij->...', ints_b, x[1]).get()) for x,y in xy]
         pol = np.array(pol)
         y = xy[0][1]
         if isinstance(y[0], cp.ndarray):
-            pol_y = [(cp.einsum('...ij,ij->...', ints_a, y[0]).get() +
-                      cp.einsum('...ij,ij->...', ints_b, y[1]).get()) for x,y in xy]
+            pol_y = [(einsum('...ij,ij->...', ints_a, y[0]).get() +
+                      einsum('...ij,ij->...', ints_b, y[1]).get()) for x,y in xy]
             if hermi:
                 pol += pol_y
             else:  # anti-Hermitian

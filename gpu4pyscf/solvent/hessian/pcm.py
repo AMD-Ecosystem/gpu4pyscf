@@ -33,7 +33,7 @@ from gpu4pyscf.gto import int3c1e
 from gpu4pyscf.gto.int3c1e import int1e_grids
 from gpu4pyscf.hessian.rhf import HessianBase, _ao2mo
 from gpu4pyscf.lib import utils
-from gpu4pyscf.lib.cupy_helper import contract, get_avail_mem
+from gpu4pyscf.lib.cupy_helper import contract, get_avail_mem, einsum
 
 def gradgrad_switch_h(x):
     ''' 2nd derivative of h(x) '''
@@ -443,9 +443,9 @@ def analytical_hess_nuc(pcmobj, dm, verbose=None):
     d2e_from_dIdq = cupy.zeros([mol.natm, mol.natm, 3, 3])
     for i_atom in range(mol.natm):
         for i_xyz in range(3):
-            dv_g = cupy.einsum('g,xng->nx', dqdx[i_atom, i_xyz, :], v_ng_ip1_on_nuclei)
+            dv_g = einsum('g,xng->nx', dqdx[i_atom, i_xyz, :], v_ng_ip1_on_nuclei)
             de_grad_nuc = -cupy.einsum('nx,n->nx', dv_g, atom_charges)
-            dv_g = cupy.einsum('n,xgn->gx', atom_charges, v_ng_ip1_on_grid)
+            dv_g = einsum('n,xgn->gx', atom_charges, v_ng_ip1_on_grid)
             dv_g = cupy.einsum('gx,g->gx', dv_g, dqdx[i_atom, i_xyz, :])
             de_grad_nuc -= cupy.asarray([cupy.sum(dv_g[p0:p1], axis=0) for p0,p1 in gridslice])
 
@@ -554,7 +554,7 @@ def analytical_hess_qv(pcmobj, dm, verbose=None):
         for i_xyz in range(3):
             dq  = rho_q_dq * dqdx[i_atom, i_xyz, :]
             dq = cupy.asarray([cupy.sum(dq[:,p0:p1], axis=1) for p0,p1 in gridslice])
-            dvj = 2.0 * cupy.einsum("Adq,q->Ad", rho_q_dorbital, dqdx[i_atom, i_xyz, :])
+            dvj = 2.0 * einsum("Adq,q->Ad", rho_q_dorbital, dqdx[i_atom, i_xyz, :])
 
             d2e_from_dIdq[i_atom, :, i_xyz, :] = dq + dvj
 

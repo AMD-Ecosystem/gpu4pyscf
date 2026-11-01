@@ -27,6 +27,7 @@ from pyscf.pbc.scf import uhf as uhf_cpu
 from gpu4pyscf.lib import logger, utils
 from gpu4pyscf.scf import uhf as mol_uhf
 from gpu4pyscf.pbc.scf import hf as pbchf
+from gpu4pyscf.lib.cupy_helper import einsum
 
 
 def _normalize_spin_dm_(dm, ne, nelec):
@@ -118,7 +119,7 @@ class UHF(pbchf.SCF):
 
         if s1e is None:
             s1e = self.get_ovlp(cell)
-        ne = cp.einsum('xij,ji->x', cp.asarray(dm), s1e).real.get()
+        ne = einsum('xij,ji->x', cp.asarray(dm), s1e).real.get()
         nelec = self.nelec
         if any(abs(ne - nelec) > 0.01):
             logger.debug(self, 'Big error detected in the electron number '

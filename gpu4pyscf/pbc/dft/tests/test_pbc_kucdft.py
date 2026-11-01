@@ -18,6 +18,7 @@ import unittest
 from pyscf.pbc import gto as pbcgto
 from gpu4pyscf.pbc import dft as pbcdft
 from gpu4pyscf.pbc.dft.kucdft import CDFT_KUKS
+from gpu4pyscf.lib.cupy_helper import einsum
 
 
 def setUpModule():
@@ -56,8 +57,8 @@ class KnownValues(unittest.TestCase):
         dm_kpts = mf.make_rdm1()
         proj = mf.constraint_projectors[0]
         k_weights = cp.full(len(kpts), 1.0/len(kpts))
-        val_a = cp.einsum('kij,kji->k', dm_kpts[0], proj)
-        val_b = cp.einsum('kij,kji->k', dm_kpts[1], proj)
+        val_a = einsum('kij,kji->k', dm_kpts[0], proj)
+        val_b = einsum('kij,kji->k', dm_kpts[1], proj)
         pop = cp.sum((val_a + val_b) * k_weights)
 
         ref_energy = -11.176954803067169

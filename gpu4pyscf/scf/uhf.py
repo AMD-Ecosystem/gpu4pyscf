@@ -19,7 +19,7 @@ from pyscf.scf import uhf as uhf_cpu
 from pyscf.scf import hf as hf_cpu
 from pyscf.data.nist import HARTREE2EV
 from gpu4pyscf.lib import logger
-from gpu4pyscf.lib.cupy_helper import tag_array, asarray
+from gpu4pyscf.lib.cupy_helper import tag_array, asarray, einsum
 from gpu4pyscf.scf.hf import eigh, damping, level_shift, process_sap_basis, make_sap
 from gpu4pyscf.scf import hf
 from gpu4pyscf.gto.mole import groupby
@@ -57,7 +57,7 @@ def spin_square(mo, s=None):
         s = mo_a.conj().T.dot(mo_b)
     else:
         s = mo_a.conj().T.dot(s).dot(mo_b)
-    ssxy = (nocc_a+nocc_b) * .5 - cupy.einsum('ij,ij->', s.conj(), s).real.get()
+    ssxy = (nocc_a+nocc_b) * .5 - einsum('ij,ij->', s.conj(), s).real.get()
     ssz = (nocc_b-nocc_a)**2 * .25
     ss = float(ssxy) + ssz
     s = (ss+.25)**.5 - .5
@@ -134,10 +134,10 @@ def energy_elec(mf, dm=None, h1e=None, vhf=None):
     if vhf is None or getattr(vhf, 'ecoul', None) is None:
         vhf = mf.get_veff(mf.mol, dm)
     if h1e[0].ndim < dm[0].ndim:  # get [0] because h1e and dm may not be ndarrays
-        e1 = cupy.einsum('ij,nji->', h1e, dm)
+        e1 = einsum('ij,nji->', h1e, dm)
     else:
-        e1 = cupy.einsum('nij,nji->', h1e, dm)
-    e2 = cupy.einsum('nij,nji->', vhf, dm) * .5
+        e1 = einsum('nij,nji->', h1e, dm)
+    e2 = einsum('nij,nji->', vhf, dm) * .5
     e1 = float(e1.real.get())
     e2 = float(e2.real.get())
     e_elec = e1 + e2
@@ -219,11 +219,11 @@ def _trace_ecoul(vj, ddm, dm_last, vhf_last):
     ecoul = None
     if dm_last is not None:
         if hasattr(vhf_last, 'ecoul') and ddm.ndim == 3:
-            ecoul = float(cupy.einsum('nij,ji->', dm_last, vj).real.get())
-            ecoul += float(cupy.einsum('nij,ji->', ddm, vj).real.get()) * .5
+            ecoul = float(einsum('nij,ji->', dm_last, vj).real.get())
+            ecoul += float(einsum('nij,ji->', ddm, vj).real.get()) * .5
             ecoul += vhf_last.ecoul
     elif ddm.ndim == 3:
-        ecoul = float(cupy.einsum('nij,ji->', ddm, vj).real.get()) * .5
+        ecoul = float(einsum('nij,ji->', ddm, vj).real.get()) * .5
     return ecoul
 
 class UHF(hf.SCF):
@@ -405,7 +405,7 @@ class UHF(hf.SCF):
             return key
         dm = hf.SCF.get_init_guess(self, mol, key, **kwargs)
         if self.verbose >= logger.DEBUG1:
-            nelec = cupy.einsum('nij,ji->n', dm, self.get_ovlp(mol)).real
+            nelec = einsum('nij,ji->n', dm, self.get_ovlp(mol)).real
             logger.debug1(self, 'Nelec from initial guess = %s', nelec)
         return dm
 

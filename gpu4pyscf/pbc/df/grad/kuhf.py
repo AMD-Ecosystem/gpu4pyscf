@@ -26,6 +26,7 @@ from pyscf.pbc.lib.kpts_helper import is_zero
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.cupy_helper import (
     contract, asarray, ndarray, get_avail_mem, empty_aligned)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.__config__ import props as gpu_specs
 from gpu4pyscf.gto.mole import RysIntEnvVars, _scale_sp_ctr_coeff
 from gpu4pyscf.pbc.df.int3c2e import (
@@ -481,14 +482,14 @@ def _get_ejk_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, j_factor=1., k_fac
 
                 pqG_compressed = eval_ft(Gv[p0:p1] + kpts[kp], out=compact_buf)
                 dm_vG_compressed[diag_idx] *= .5
-                vG = cp.einsum('pg,pg->g', pqG_compressed[:n_compact_pairs],
+                vG = einsum('pg,pg->g', pqG_compressed[:n_compact_pairs],
                                dm_vG_compressed[:n_compact_pairs]).real
                 # LpqG already includes both exchanged orbital orientations.
-                sigma_G += cp.einsum('g,xyg->xy', vG, wcoulG_LR1[j2c_idx,:,:,p0:p1])
+                sigma_G += einsum('g,xyg->xy', vG, wcoulG_LR1[j2c_idx,:,:,p0:p1])
                 if separated_dd:
-                    vG = cp.einsum('pg,pg->g', pqG_compressed[n_compact_pairs:],
+                    vG = einsum('pg,pg->g', pqG_compressed[n_compact_pairs:],
                                    dm_vG_compressed[n_compact_pairs:]).real
-                    sigma_G += cp.einsum('g,xyg->xy', vG, wcoulG_FR1[j2c_idx,:,:,p0:p1])
+                    sigma_G += einsum('g,xyg->xy', vG, wcoulG_FR1[j2c_idx,:,:,p0:p1])
                 dm_vG = dm_ooG = dm_vG_compressed = tmp = None
 
                 # Auxiliary response uses the weighted compact and DD columns.
@@ -500,7 +501,7 @@ def _get_ejk_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, j_factor=1., k_fac
                 beta = 0
                 dm_auxG = ndarray((naux,nGv), dtype=np.complex128, buffer=density_buf)
                 if j_factor != 0 and kp == 0:
-                    rhoGz = cp.einsum('kpqG,kqp->G', pqG, dm_sorted)
+                    rhoGz = einsum('kpqG,kqp->G', pqG, dm_sorted)
                     cp.multiply(auxvec[:,None], rhoGz, out=dm_auxG)
                     beta = j_factor
                 # einsum('pqG,pi,qj,rij,Gx,rG->rx', pqG, c, c, dm_oo, 1j*Gv, conj(auxG))
@@ -516,8 +517,8 @@ def _get_ejk_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, j_factor=1., k_fac
                 # = -(ji|r)^{[0]} * metric * (r|G)^{[1]} (G|s)^{[0]} * metric * (ij|s)^{[0]}
                 dm_auxG1 = ndarray((naux,nGv), dtype=np.complex128, buffer=scratch1)
                 contract('sr,sG->rG', dm_aux[j2c_idx], auxG[:,j2c_idx], out=dm_auxG1)
-                vG = cp.einsum('rg,rg->g', dm_auxG1, auxG_conj).real
-                sigma_G -= .5 * cp.einsum('g,xyg->xy', vG, wcoulG_LR1[j2c_idx,:,:,p0:p1])
+                vG = einsum('rg,rg->g', dm_auxG1, auxG_conj).real
+                sigma_G -= .5 * einsum('g,xyg->xy', vG, wcoulG_LR1[j2c_idx,:,:,p0:p1])
                 dm_auxG1 *= wcoulG_LR0[j2c_idx,p0:p1]
                 dm_auxG -= dm_auxG1
                 dm_auxG = dm_auxG.view(np.float64)
@@ -681,7 +682,7 @@ def _get_ejk_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, j_factor=1., k_fac
         de_ewald *= -k_factor * exx_0 / nkpts
         ejk_sigma += de_ewald
 
-        ek_G0 = float(cp.einsum('kij,kji->', s0, k_dm).real.get()) / nkpts**2
+        ek_G0 = float(einsum('kij,kji->', s0, k_dm).real.get()) / nkpts**2
         # *.5 for the factor 1/2 in Coulomb operator
         ejk_sigma[-3:] -= k_factor * .5 * ek_G0 * exx_1
     return ejk_sigma

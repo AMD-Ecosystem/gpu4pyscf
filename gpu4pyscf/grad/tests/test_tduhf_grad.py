@@ -23,6 +23,7 @@ from gpu4pyscf import scf as gpu_scf
 from gpu4pyscf.lib.multi_gpu import num_devices
 from gpu4pyscf.nac.finite_diff import diagonalize_u as diagonalize
 from gpu4pyscf.nac.finite_diff import diagonalize_tda_u as diagonalize_tda
+from gpu4pyscf.lib.cupy_helper import einsum
 
 atom = """
 O       0.0000000000     0.0000000000     0.0000000000
@@ -238,7 +239,7 @@ class KnownValues(unittest.TestCase):
         cp.random.seed(4)
         c = cp.random.rand(2, nao, nao) - .5
         s = mf.get_ovlp()
-        diag = cp.einsum('npi,pq,nqi->ni', c, s, c)
+        diag = einsum('npi,pq,nqi->ni', c, s, c)
         mf.mo_coeff = c / diag[:,None,:]**.5
         mf.mo_energy = cp.stack([cp.arange(nao)*3., cp.arange(nao)*3.])
         mf.mo_occ = cp.zeros((2, nao))

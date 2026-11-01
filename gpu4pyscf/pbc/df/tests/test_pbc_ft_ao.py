@@ -28,6 +28,7 @@ from gpu4pyscf.pbc.lib.kpts_helper import conj_images_in_bvk_cell
 from gpu4pyscf.pbc.df.ft_ao import libpbc
 from gpu4pyscf.pbc.df.aft import AFTDF
 from gpu4pyscf.pbc.tools import get_coulG
+from gpu4pyscf.lib.cupy_helper import einsum
 
 def setUpModule():
     global cell
@@ -177,7 +178,7 @@ class KnownValues(unittest.TestCase):
         ft_opt = ft_ao_gpu.FTOpt(cell).build()
         rhoG = ft_opt.contract_dm(ft_opt.cell.apply_C_mat_CT(dm), Gv).get()
 
-        ref = cp.einsum('Gpq,qp->G', ft_aopair(cell, Gv), dm).get()
+        ref = einsum('Gpq,qp->G', ft_aopair(cell, Gv), dm).get()
         self.assertAlmostEqual(abs(ref-rhoG).max(), 0, 10)
 
     def test_j(self):
@@ -279,7 +280,7 @@ class KnownValues(unittest.TestCase):
         def eval_aux(c):
             Gv = c.get_Gv(mesh)
             auxG = ft_ao_gpu.ft_ao(SortedGTO.from_cell(c), Gv, sort_output=False).T
-            return cp.einsum('ag,ag->', auxG.conj(), dm_auxG).real.get()
+            return einsum('ag,ag->', auxG.conj(), dm_auxG).real.get()
 
         for (i, j) in [(0, 0), (0, 1), (0, 2), (1, 1), (2, 0), (2, 2)]:
             cell1, cell2 = _finite_diff_cells(cell, i, j, disp=disp)

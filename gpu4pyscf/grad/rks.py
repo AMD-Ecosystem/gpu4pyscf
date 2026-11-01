@@ -30,6 +30,7 @@ from gpu4pyscf.dft import gen_grid
 from gpu4pyscf.lib.cupy_helper import (
     contract, get_avail_mem, add_sparse, tag_array, sandwich_dot,
     reduce_to_device, take_last2d, ndarray, batched_vec_norm2)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.lib import logger
 from gpu4pyscf.__config__ import num_devices
 from gpu4pyscf.dft.numint import NLC_REMOVE_ZERO_RHO_GRID_THRESHOLD
@@ -176,7 +177,7 @@ def _get_exc_task(ni, mol, grids, xc_code, dms, mo_coeff, mo_occ,
                 aow = numint._scale_ao(ao_mask[0], wv, out=aow_buf)
                 vtmp = _d1_dot_(ao_mask[1:4], aow.T, out=vtmp_buf)
                 dm_mask = take_last2d(dm, idx, out=dm_mask_buf)
-                exc1_ao[idx] += cupy.einsum('nij,ij->ni', vtmp, dm_mask).T
+                exc1_ao[idx] += einsum('nij,ij->ni', vtmp, dm_mask).T
         elif xctype == 'GGA':
 
             ao_deriv = 2
@@ -191,7 +192,7 @@ def _get_exc_task(ni, mol, grids, xc_code, dms, mo_coeff, mo_occ,
                 wv[0] *= .5
                 vtmp = _gga_grad_sum_(ao_mask, wv, buf=aow_buf, out=vtmp_buf)
                 dm_mask = take_last2d(dm, idx, out=dm_mask_buf)
-                exc1_ao[idx] += cupy.einsum('nij,ij->ni', vtmp, dm_mask).T
+                exc1_ao[idx] += einsum('nij,ij->ni', vtmp, dm_mask).T
 
         elif xctype == 'NLC':
             raise NotImplementedError('NLC')
@@ -211,7 +212,7 @@ def _get_exc_task(ni, mol, grids, xc_code, dms, mo_coeff, mo_occ,
                 vtmp = _gga_grad_sum_(ao_mask, wv, buf=aow_buf, out=vtmp_buf)
                 vtmp = _tau_grad_dot_(ao_mask, wv[4], accumulate=True, buf=aow_buf, out=vtmp)
                 dm_mask = take_last2d(dm, idx, out=dm_mask_buf)
-                exc1_ao[idx] += cupy.einsum('nij,ij->ni', vtmp, dm_mask).T
+                exc1_ao[idx] += einsum('nij,ij->ni', vtmp, dm_mask).T
 
         log.timer_debug1('gradient of vxc', *t0)
     return exc1_ao
@@ -315,7 +316,7 @@ def get_nlc_exc(ni, mol, grids, xc_code, dms, relativity=0, hermi=1,
         vmat_tmp = _gga_grad_sum_(ao_mask, wv)
         #add_sparse(vmat, vmat_tmp, mask)
         dm_mask = dm[mask[:,None],mask]
-        exc1[mask] += cupy.einsum('nij,ij->ni', vmat_tmp, dm_mask).T
+        exc1[mask] += einsum('nij,ij->ni', vmat_tmp, dm_mask).T
 
     # - sign because nabla_X = -nabla_x
     exc1 = -_reduce_to_atom(opt._sorted_mol, exc1)
@@ -515,7 +516,7 @@ def get_exc_full_response(ni, mol, grids, xc_code, dms, relativity=0, hermi=1,
             vtmp = _d1_dot_(ao[1:4], aow.T)
 
             add_sparse(dvmat_orbital_response, vtmp, idx)
-            de_grid_response_rho[i_atom] += cupy.einsum('xij,ji->x', vtmp, dms_masked) * 2
+            de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp, dms_masked) * 2
 
         elif xctype == 'GGA':
             split_wv = cupy.ascontiguousarray(wv[:, g0:g1][:, nonzero_weight_mask[g0:g1]])
@@ -524,7 +525,7 @@ def get_exc_full_response(ni, mol, grids, xc_code, dms, relativity=0, hermi=1,
             vtmp = _gga_grad_sum_(ao, split_wv[:4])
 
             add_sparse(dvmat_orbital_response, vtmp, idx)
-            de_grid_response_rho[i_atom] += cupy.einsum('xij,ji->x', vtmp, dms_masked) * 2
+            de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp, dms_masked) * 2
 
         elif xctype == 'NLC':
             raise ValueError("You see a bug, please report to the developer team.")
@@ -538,7 +539,7 @@ def get_exc_full_response(ni, mol, grids, xc_code, dms, relativity=0, hermi=1,
             _tau_grad_dot_(ao, split_wv[4], accumulate=True, out=vtmp)
 
             add_sparse(dvmat_orbital_response, vtmp, idx)
-            de_grid_response_rho[i_atom] += cupy.einsum('xij,ji->x', vtmp, dms_masked) * 2
+            de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp, dms_masked) * 2
 
         else:
             raise NotImplementedError(f"Unrecognized xctype = {xctype}")
@@ -687,7 +688,7 @@ def get_nlc_exc_full_response(ni, mol, grids, xc_code, dms, relativity=0, hermi=
         vtmp = _gga_grad_sum_(ao, wv)
         add_sparse(dvmat_orbital_response, vtmp, idx)
         dms_masked = take_last2d(dms_sorted, idx, out = dm_mask_buf)
-        de_grid_response_rho[i_atom_of_grids] += cupy.einsum('xij,ji->x', vtmp, dms_masked) * 2
+        de_grid_response_rho[i_atom_of_grids] += einsum('xij,ji->x', vtmp, dms_masked) * 2
 
         del wv, vtmp
 

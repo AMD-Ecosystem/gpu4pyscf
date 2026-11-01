@@ -22,7 +22,7 @@ from gpu4pyscf.df import int3c2e_bdiv as int3c2e
 from gpu4pyscf.df.grad import rhf as df_rhf_grad
 from gpu4pyscf.df.grad import uhf as df_uhf_grad
 from gpu4pyscf.df.grad.rhf import _jk_energy_per_atom
-from gpu4pyscf.lib.cupy_helper import tag_array
+from gpu4pyscf.lib.cupy_helper import tag_array, einsum
 
 atom = '''
 O       0.0000000000    -0.0000000000     0.1174000000
@@ -329,8 +329,8 @@ class KnownValues(unittest.TestCase):
             j3c = aux_e2(mol1, auxmol1)
             j2c = auxmol1.intor('int2c2e')
             eri = lib.einsum('ijp,pq,klq->ijkl', j3c, inv(j2c), j3c)
-            ref = .5 * np.einsum('ijkl,mji,nlk->', eri, dm, dm)
-            ref -= .5 * np.einsum('ijkl,sjk,sli->', eri, dm, dm)
+            ref = .5 * einsum('ijkl,mji,nlk->', eri, dm, dm)
+            ref -= .5 * einsum('ijkl,sjk,sli->', eri, dm, dm)
             atom_coords[i,x] -= disp
             return ref
 

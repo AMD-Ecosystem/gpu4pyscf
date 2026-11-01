@@ -24,7 +24,7 @@ from gpu4pyscf.lib import logger
 from gpu4pyscf.pbc.grad import krhf as krhf_grad
 from gpu4pyscf.grad import rks as rks_grad
 from gpu4pyscf.pbc.df import GDF
-from gpu4pyscf.lib.cupy_helper import contract
+from gpu4pyscf.lib.cupy_helper import contract, einsum
 from gpu4pyscf.pbc.dft import multigrid, multigrid_v3, BeckeGrids
 from gpu4pyscf.pbc.dft.gen_grid import get_becke_weight_derivative
 from gpu4pyscf.pbc.dft.numint import _GTOvalOpt
@@ -243,7 +243,7 @@ def get_vxc_full_response(ni, cell, grids, xc_code, dm_kpts, kpts, hermi=1):
             for kn in range(nkpts):
                 vtmp_k = _d1_dot_(ao_ks[kn,1:4], aow[kn])
                 dvmat_orbital_response[kn] += vtmp_k
-                de_grid_response_rho[i_atom] += cp.einsum('xij,ji->x', vtmp_k, dm_kpts[kn]) * 2
+                de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp_k, dm_kpts[kn]) * 2
                 del vtmp_k
 
             del aow, rho, vxc
@@ -269,7 +269,7 @@ def get_vxc_full_response(ni, cell, grids, xc_code, dm_kpts, kpts, hermi=1):
             for kn in range(nkpts):
                 vtmp_k = _gga_grad_sum_(ao_ks[kn], wv)
                 dvmat_orbital_response[kn] += vtmp_k
-                de_grid_response_rho[i_atom] += cp.einsum('xij,ji->x', vtmp_k, dm_kpts[kn]) * 2
+                de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp_k, dm_kpts[kn]) * 2
                 del vtmp_k
             del rho, vxc
 
@@ -302,7 +302,7 @@ def get_vxc_full_response(ni, cell, grids, xc_code, dm_kpts, kpts, hermi=1):
             for kn in range(nkpts):
                 vtmp_k = _gga_grad_sum_(ao_ks[kn], wv[:4]) + _tau_grad_dot_(ao_ks[kn], wv[4])
                 dvmat_orbital_response[kn] += vtmp_k
-                de_grid_response_rho[i_atom] += cp.einsum('xij,ji->x', vtmp_k, dm_kpts[kn]) * 2
+                de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp_k, dm_kpts[kn]) * 2
                 del vtmp_k
             del rho, vxc
 

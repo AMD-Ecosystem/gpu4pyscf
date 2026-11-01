@@ -32,6 +32,7 @@ from gpu4pyscf.lib import multi_gpu
 from gpu4pyscf.lib.cupy_helper import (
     condense, transpose_sum, dist_matrix, contract, asarray, ndarray,
     get_avail_mem, absmax)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.gto.mole import (
     groupby, extract_pgto_params, most_diffuse_pgto, SortedCell)
 from gpu4pyscf.scf.jk import (
@@ -1119,7 +1120,7 @@ class PBCJKMatrixOpt:
                 k_dm = contract('nkpr,nkrs->kps', k_dm, dms)
                 ejk_sigma = int1e.ovlp_derivatives(cell, k_dm, kpts)
                 ejk_sigma *= -sr_factor / nkpts * wcoulG_for_k
-                ek_G0 = cp.einsum('kpq,kqp->', k_dm, s0).real.get()
+                ek_G0 = einsum('kpq,kqp->', k_dm, s0).real.get()
                 ejk_sigma[-3:] -= .5 * sr_factor / nkpts**2 * ek_G0 * wcoulG_strain_deriv
             else:
                 ejk_sigma = np.zeros([cell.natm+3, 3])
@@ -1193,7 +1194,7 @@ class PBCJKMatrixOpt:
                 Gpq = ft_kern(Gv[p0:p1])
                 Gpq = Gpq.transpose(0,2,3,1)
                 rhoG = contract('kji,kijg->g', dm_sf, Gpq)
-                ej_sigma[-3:] += .25*cp.einsum('xyg,g,g->xy', wcoulG_1[:,:,p0:p1], rhoG.conj(), rhoG).real
+                ej_sigma[-3:] += .25*einsum('xyg,g,g->xy', wcoulG_1[:,:,p0:p1], rhoG.conj(), rhoG).real
                 vG = rhoG.conj()
                 vG *= wcoulG_0[p0:p1]
                 GvT = cp.asarray(Gv[p0:p1].T.ravel())
@@ -1216,7 +1217,7 @@ class PBCJKMatrixOpt:
                 if exclude_dd_block and len(bas_ij_wo_dd) > 0:
                     Gpq[:,diffuse_i,diffuse_j] = 0.
                     rhoG = contract('kji,kijg->g', dm_sf, Gpq)
-                    ej_sigma[-3:] += .25*cp.einsum('xyg,g,g->xy', wcoulG_SR_1[:,:,p0:p1], rhoG.conj(), rhoG).real
+                    ej_sigma[-3:] += .25*einsum('xyg,g,g->xy', wcoulG_SR_1[:,:,p0:p1], rhoG.conj(), rhoG).real
                     vG = rhoG.conj()
                     vG *= wcoulG_SR_0[p0:p1]
                     err = kern(
@@ -1303,7 +1304,7 @@ class PBCJKMatrixOpt:
                         tmp = contract('sjk,lkg->sjlg', dms[:,0], Gpq_conj[0])
                         dm_vG = contract('sjlg,sli->jig', tmp, dms[:,0])
                         tmp = None
-                        vkG = cp.einsum('pqg,qpg->g', dm_vG, Gpq[0]).real
+                        vkG = einsum('pqg,qpg->g', dm_vG, Gpq[0]).real
                         if ft_opt.permutation_symmetry:
                             dm_vG *= 2
                     else:
@@ -1311,13 +1312,13 @@ class PBCJKMatrixOpt:
                         idx[kj_idx] = ki_idx
                         dm_k = contract('snjk,nlkg->snljg', dms, Gpq_conj)
                         dm_k = contract('snljg,snli->njig', dm_k, dms[:,idx])
-                        vkG = cp.einsum('njig,nijg->g', dm_k, Gpq).real
+                        vkG = einsum('njig,nijg->g', dm_k, Gpq).real
                         dm_vG = contract('Lk,kpqg->Lpqg', expLk, dm_k)
                         if ft_opt.permutation_symmetry:
                             contract('Lk,kpqg->Lqpg', expLk[:,idx].conj(), dm_k,
                                      beta=1, out=dm_vG)
                         dm_k = None
-                    tmp = cp.einsum('xyg,g->xy', wcoulG_1[:,:,p0:p1], vkG)
+                    tmp = einsum('xyg,g->xy', wcoulG_1[:,:,p0:p1], vkG)
                     if swap_2e:
                         sigma += tmp * 2
                         dm_vG *= wcoulG_0[p0:p1] * 2
@@ -1351,19 +1352,19 @@ class PBCJKMatrixOpt:
                             tmp = contract('sjk,lkg->sjlg', dms[:,0], Gpq_conj[0])
                             dm_vG = contract('sjlg,sli->jig', tmp, dms[:,0])
                             tmp = None
-                            vkG = cp.einsum('pqg,qpg->g', dm_vG, Gpq[0]).real
+                            vkG = einsum('pqg,qpg->g', dm_vG, Gpq[0]).real
                             if ft_opt.permutation_symmetry:
                                 dm_vG *= 2
                         else:
                             dm_k = contract('snjk,nlkg->snjlg', dms, Gpq_conj)
                             dm_k = contract('snjlg,snli->njig', dm_k, dms[:,idx])
-                            vkG = cp.einsum('njig,nijg->g', dm_k, Gpq).real
+                            vkG = einsum('njig,nijg->g', dm_k, Gpq).real
                             dm_vG = contract('Lk,kpqg->Lpqg', expLk, dm_k)
                             if ft_opt.permutation_symmetry:
                                 contract('Lk,kpqg->Lqpg', expLk[:,idx].conj(), dm_k,
                                          beta=1, out=dm_vG)
                             dm_k = None
-                        tmp = cp.einsum('xyg,g->xy', wcoulG_SR_1[:,:,p0:p1], vkG)
+                        tmp = einsum('xyg,g->xy', wcoulG_SR_1[:,:,p0:p1], vkG)
                         if swap_2e:
                             sigma += tmp * 2
                             dm_vG *= wcoulG_SR_0[p0:p1] * 2

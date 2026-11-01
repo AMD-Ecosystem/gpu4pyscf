@@ -27,7 +27,7 @@ from pyscf import lib
 from pyscf.pbc.dft import uks as uks_cpu
 from gpu4pyscf.pbc.scf import uhf as pbcuhf
 from gpu4pyscf.lib import logger, utils
-from gpu4pyscf.lib.cupy_helper import tag_array, get_avail_mem
+from gpu4pyscf.lib.cupy_helper import tag_array, get_avail_mem, einsum
 from gpu4pyscf.dft import uks as mol_uks
 from gpu4pyscf.pbc.dft import rks, krks
 from gpu4pyscf.pbc.dft import multigrid
@@ -93,11 +93,11 @@ def get_veff(ks, cell=None, dm=None, dm_last=None, vhf_last=None, hermi=1,
         vxc += vj[0] + vj[1]
         ecoul = None
         if ground_state:
-            ecoul = float(cp.einsum('nij,mji->', dm, vj).real.get()) * .5
+            ecoul = float(einsum('nij,mji->', dm, vj).real.get()) * .5
     if hybrid:
         vxc -= vk
         if ground_state:
-            exc -= float(cp.einsum('nij,nji->', dm, vk).real.get()) * .5
+            exc -= float(einsum('nij,nji->', dm, vk).real.get()) * .5
     vxc = tag_array(vxc, ecoul=ecoul, exc=exc)
     if vj_sr is not None:
         vxc.vj = vj_sr

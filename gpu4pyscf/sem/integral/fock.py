@@ -18,6 +18,7 @@ import cupyx
 from gpu4pyscf.sem.integral import hcore2c1e, eri_2c2e
 import ctypes
 from gpu4pyscf.sem.lib import libsem
+from gpu4pyscf.lib.cupy_helper import einsum
 
 
 def _calc_kr_offsets(natorb, pair_i, pair_j, n_pairs):
@@ -416,8 +417,8 @@ def get_jk_debug(mol, dm, hermi=1):
     assert hermi == 1, "Only hermitian matrices are supported."
     eri_4d = unpack_eri_4d(mol)
     
-    J = cp.einsum('ls, mnls -> mn', dm, eri_4d)
-    K = cp.einsum('ls, mlns -> mn', dm, eri_4d)
+    J = einsum('ls, mnls -> mn', dm, eri_4d)
+    K = einsum('ls, mlns -> mn', dm, eri_4d)
     
     return J, K
 

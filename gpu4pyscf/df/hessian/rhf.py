@@ -30,6 +30,7 @@ from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.utils import splits_by_blocksize
 from gpu4pyscf.lib.cupy_helper import (
     contract, ndarray, transpose_sum, get_avail_mem, empty_mapped, fill_symmetric)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.df.int3c2e_bdiv import (
     _split_l_ctr_pattern, argsort_aux, get_ao_pair_loc, _nearest_power2,
     SHM_SIZE, LMAX, L_AUX_MAX, THREADS, libvhf_rys, int2c2e,
@@ -1026,7 +1027,7 @@ def _get_veff(int3c2e_opt, mo_coeff, mo_occ, j_factor=1, k_factor=1,
                 if j_factor != 0:
                     contract('xriq,r->xiq', j3c_1, auxvec_by_atm[p0:p1], j_factor,
                              beta=1, out=vhf_atm[i,:,nocc0:nocc1])
-                    tmp = cp.einsum('xrs,s->xr', j2c_10[:,p0:p1], auxvec)
+                    tmp = einsum('xrs,s->xr', j2c_10[:,p0:p1], auxvec)
                     contract('riq,xr->xiq', dm_3c_atm, tmp, j_factor, beta=1,
                              out=vhf_atm[i,:,nocc0:nocc1])
             tmp = j3c_1 = dm_3c_atm = dm_oo_atm = None
@@ -1101,7 +1102,7 @@ def _get_veff(int3c2e_opt, mo_coeff, mo_occ, j_factor=1, k_factor=1,
                                 contract('pqr,r->pq', j3c, auxvec[_aux0:_aux1],
                                          j_factor, beta=1, out=vhf1[x])
                             for i, (p0, p1) in enumerate(zip(aoslices[:-1], aoslices[1:])):
-                                auxvec1 = cp.einsum('pqr,pq->r', j3c[p0:p1], dm[p0:p1])
+                                auxvec1 = einsum('pqr,pq->r', j3c[p0:p1], dm[p0:p1])
                                 contract('riq,r->iq', dm_3c[_aux0:_aux1], auxvec1,
                                          2*j_factor, beta=1, out=vhf_atm[i,x,nocc0:nocc1])
 

@@ -57,6 +57,7 @@ from gpu4pyscf.pbc.dft.numint import KNumInt, eval_ao_kpts, _GTOvalOpt
 from gpu4pyscf.pbc.gto.cell import get_Gv
 from gpu4pyscf.lib.cupy_helper import (
     contract, asarray, sandwich_dot, batched_vec_norm2)
+from gpu4pyscf.lib.cupy_helper import einsum
 
 ALIGNED = 256
 
@@ -111,8 +112,8 @@ def get_vxc(ks_grad, cell, dm_kpts, kpts, with_j=False, with_nuc=False):
 
     def partial_dot(bra, ket):
         '''conj(ig),ig->g'''
-        rho = cp.einsum('ig,ig->g', bra.real, ket.real)
-        rho += cp.einsum('ig,ig->g', bra.imag, ket.imag)
+        rho = einsum('ig,ig->g', bra.real, ket.real)
+        rho += einsum('ig,ig->g', bra.imag, ket.imag)
         return rho
 
     eval_gto_opt = _GTOvalOpt(cell, kpts, deriv=deriv+1)
@@ -194,8 +195,8 @@ def get_vxc(ks_grad, cell, dm_kpts, kpts, with_j=False, with_nuc=False):
     rho0, rho1 = rho0_fft_order, rho1_fft_order
 
     exc, vxc = ni.eval_xc_eff(xc_code, rho0, 1, xctype=xctype, spin=0)[:2]
-    out += cp.einsum('xyng,ng->xy', rho1, vxc).real.get() * weight_0
-    out += cp.einsum('g,g->', rho0[0], exc.ravel()).real.get() * weight_1
+    out += einsum('xyng,ng->xy', rho1, vxc).real.get() * weight_0
+    out += einsum('g,g->', rho0[0], exc.ravel()).real.get() * weight_1
 
     out += _contract_coulomb_and_nuc(cell, mesh, dm_kpts, kpts, rho0[0],
                                      rho1[:,:,0], grids, with_j, with_nuc)
@@ -211,25 +212,25 @@ def _contract_coulomb_and_nuc(cell, mesh, dm, kpts, rho0, rho1, grids, with_j, w
     out = 0
     if with_j:
         vR = pbctools.ifft(rhoG * coulG_0, mesh)
-        EJ = cp.einsum('xyg,g->xy', rho1, vR).real.get() * weight_0 * 2
-        EJ += cp.einsum('g,g->', rho0, vR).real.get() * weight_1
-        EJ += cp.einsum('xyg,g->xy', coulG_1, rhoG.conj()*rhoG).real.get() * (weight_0/ngrids)
+        EJ = einsum('xyg,g->xy', rho1, vR).real.get() * weight_0 * 2
+        EJ += einsum('g,g->', rho0, vR).real.get() * weight_1
+        EJ += einsum('xyg,g->xy', coulG_1, rhoG.conj()*rhoG).real.get() * (weight_0/ngrids)
         out += .5 * EJ
 
     if with_nuc:
         if cell._pseudo:
             vpplocG_0, vpplocG_1 = _get_vpplocG_strain_derivatives(cell, mesh)
             vpplocR = pbctools.ifft(vpplocG_0, mesh).real
-            Ene = cp.einsum('xyg,g->xy', rho1, vpplocR).real.get()
-            Ene += cp.einsum('g,xyg->xy', rhoG.conj(), vpplocG_1).real.get() * (1./ngrids)
+            Ene = einsum('xyg,g->xy', rho1, vpplocR).real.get()
+            Ene += einsum('g,xyg->xy', rhoG.conj(), vpplocG_1).real.get() * (1./ngrids)
         else:
             # SI corresponds to Fourier components of the fractional atomic
             # positions within the cell. It does not respond to the strain
             # transformation
             ZG = _get_ZSI(cell, mesh)
             vR = pbctools.ifft(ZG * coulG_0, mesh).real
-            Ene = cp.einsum('xyg,g->xy', rho1, vR).real.get()
-            Ene += cp.einsum('xyg,g->xy', coulG_1, rhoG.conj()*ZG).real.get() * (1./ngrids)
+            Ene = einsum('xyg,g->xy', rho1, vR).real.get()
+            Ene += einsum('xyg,g->xy', coulG_1, rhoG.conj()*ZG).real.get() * (1./ngrids)
         out += Ene
     return out
 
@@ -338,7 +339,7 @@ def _get_vpplocG_strain_derivatives(cell, mesh):
     Gx, Gy, Gz = Gv_bases
     GvT = Gx[:,:,None,None] + Gy[:,None,:,None] + Gz[:,None,None,:]
     GvT = GvT.reshape(3, ngrids)
-    G2 = cp.einsum('xg,xg->g', GvT, GvT)
+    G2 = einsum('xg,xg->g', GvT, GvT)
     coulG = 4 * np.pi / G2
     coulG[0] = 0
     xyG = cp.einsum('xg,yg->xyg', GvT, GvT)

@@ -30,7 +30,7 @@ from pyscf.data.nist import HARTREE2EV
 from pyscf.lo.iao import reference_mol
 from gpu4pyscf.dft import rks
 from gpu4pyscf.lib import logger
-from gpu4pyscf.lib.cupy_helper import asarray
+from gpu4pyscf.lib.cupy_helper import asarray, einsum
 
 def get_veff(ks, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
     """
@@ -112,7 +112,7 @@ def energy_elec(mf, dm=None, h1e=None, vhf=None):
     if h1e is None: h1e = mf.get_hcore()
     if vhf is None or getattr(vhf, 'ecoul', None) is None:
         vhf = mf.get_veff(mf.mol, dm)
-    e1 = float(cp.einsum('ij,ji->', h1e, dm).real.get())
+    e1 = float(einsum('ij,ji->', h1e, dm).real.get())
     ecoul = vhf.ecoul.real
     exc = vhf.exc.real
     E_U = vhf.E_U

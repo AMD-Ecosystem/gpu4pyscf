@@ -28,6 +28,7 @@ from gpu4pyscf.pbc.df.grad.krhf import get_nuc
 from gpu4pyscf.pbc.gto.int1e import kin_derivatives
 from gpu4pyscf.lib.multi_gpu import num_devices
 from gpu4pyscf.pbc.grad.rhf import _finite_diff_cells
+from gpu4pyscf.lib.cupy_helper import einsum
 
 def numerical_hcore_gradient_and_stresstensor(cell, dm, kmesh):
     if dm.ndim == 2:
@@ -37,7 +38,7 @@ def numerical_hcore_gradient_and_stresstensor(cell, dm, kmesh):
         mf = KRHF(cell).density_fit(auxbasis="def2-universal-jkfit")
         kpts = cell.make_kpts(kmesh)
         hcore = mf.get_hcore(kpts = kpts)
-        e = cp.einsum("kij,kji->", hcore, dm)
+        e = einsum("kij,kji->", hcore, dm)
         e = e.real / kpts.shape[0]
         return e
 

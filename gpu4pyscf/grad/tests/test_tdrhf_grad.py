@@ -19,7 +19,7 @@ import cupy as cp
 from pyscf import scf, dft, lib
 import gpu4pyscf
 from gpu4pyscf.lib.multi_gpu import num_devices
-from gpu4pyscf.lib.cupy_helper import contract
+from gpu4pyscf.lib.cupy_helper import contract, einsum
 from gpu4pyscf.grad import rhf as rhf_grad
 from gpu4pyscf.grad.tdrhf import _jk_energies_per_atom
 from gpu4pyscf.nac.finite_diff import diagonalize, diagonalize_tda
@@ -303,7 +303,7 @@ class KnownValues(unittest.TestCase):
         cp.random.seed(4)
         c = cp.random.rand(nao, nao) - .5
         s = mf.get_ovlp()
-        diag = cp.einsum('pi,pq,qi->i', c, s, c)
+        diag = einsum('pi,pq,qi->i', c, s, c)
         mf.mo_coeff = c / diag**.5
         mf.mo_energy = cp.arange(nao)*3.
         mf.mo_occ = cp.zeros(nao)

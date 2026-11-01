@@ -19,6 +19,7 @@ import cupy
 import pyscf
 from pyscf import lib
 from gpu4pyscf import scf
+from gpu4pyscf.lib.cupy_helper import einsum
 try:
     from gpu4pyscf.dispersion import dftd3, dftd4
 except ImportError:
@@ -330,23 +331,23 @@ class KnownValues(unittest.TestCase):
 
         dm = mf.get_init_guess(key='minao')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 2
-        assert abs(cupy.einsum('ij,ji->', dm, s).get() - 23.998766) < 1e-6
+        assert abs(einsum('ij,ji->', dm, s).get() - 23.998766) < 1e-6
 
         dm = mf.get_init_guess(key='hcore')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 2
-        assert abs(cupy.einsum('ij,ji->', dm, s).get() - 24) < 1e-6
+        assert abs(einsum('ij,ji->', dm, s).get() - 24) < 1e-6
 
         dm = mf.get_init_guess(key='atom')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 2
-        assert abs(cupy.einsum('ij,ji->', dm, s).get() - 24) < 1e-6
+        assert abs(einsum('ij,ji->', dm, s).get() - 24) < 1e-6
 
         dm = mf.get_init_guess(key='huckel')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 2
-        assert abs(cupy.einsum('ij,ji->', dm, s).get() - 24) < 1e-6
+        assert abs(einsum('ij,ji->', dm, s).get() - 24) < 1e-6
 
         dm = mf.get_init_guess(key='mod_huckel')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 2
-        assert abs(cupy.einsum('ij,ji->', dm, s).get() - 24) < 1e-6
+        assert abs(einsum('ij,ji->', dm, s).get() - 24) < 1e-6
 
     def test_1e(self):
         mol = pyscf.M(atom='H', basis='ccpvdz', spin=1)

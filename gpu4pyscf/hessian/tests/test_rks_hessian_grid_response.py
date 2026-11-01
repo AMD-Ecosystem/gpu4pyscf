@@ -24,6 +24,7 @@ from gpu4pyscf.dft import gen_grid
 from gpu4pyscf.dft import numint
 from gpu4pyscf.hessian.rks import get_d2mu_dr2, get_d3mu_dr3, take_last2d, \
     get_drho_dA_full, get_drho_dA_sparse, get_d2rho_dAdB_full, contract_d2rho_dAdB_sparse
+from gpu4pyscf.lib.cupy_helper import einsum
 
 def setUpModule():
     global mol, mol2
@@ -1032,8 +1033,8 @@ class KnownValues(unittest.TestCase):
 
             ref_d2E_dAdB_full_response += (d2rho_dAdB_orbital_response + d2rho_dAdB_grid_response) @ weight_depsilon_drho[g0:g1]
             ref_d2E_dAdB_orbital_response += d2rho_dAdB_orbital_response @ weight_depsilon_drho[g0:g1]
-            ref_d2E_dAdB_full_response += cp.einsum("ABdDxg,xg->ABdD", d2nablarho_dAdB_orbital_response + d2nablarho_dAdB_grid_response, weight_depsilon_dnablarho[:, g0:g1])
-            ref_d2E_dAdB_orbital_response += cp.einsum("ABdDxg,xg->ABdD", d2nablarho_dAdB_orbital_response, weight_depsilon_dnablarho[:, g0:g1])
+            ref_d2E_dAdB_full_response += einsum("ABdDxg,xg->ABdD", d2nablarho_dAdB_orbital_response + d2nablarho_dAdB_grid_response, weight_depsilon_dnablarho[:, g0:g1])
+            ref_d2E_dAdB_orbital_response += einsum("ABdDxg,xg->ABdD", d2nablarho_dAdB_orbital_response, weight_depsilon_dnablarho[:, g0:g1])
 
         ni.gdftopt = None
         ni.build(mol, grids.coords)
@@ -1170,8 +1171,8 @@ class KnownValues(unittest.TestCase):
 
             ref_d2E_dAdB_full_response += (d2rho_dAdB_orbital_response + d2rho_dAdB_grid_response) @ weight_depsilon_drho[g0:g1]
             ref_d2E_dAdB_orbital_response += d2rho_dAdB_orbital_response @ weight_depsilon_drho[g0:g1]
-            ref_d2E_dAdB_full_response += cp.einsum("ABdDxg,xg->ABdD", d2nablarho_dAdB_orbital_response + d2nablarho_dAdB_grid_response, weight_depsilon_dnablarho[:, g0:g1])
-            ref_d2E_dAdB_orbital_response += cp.einsum("ABdDxg,xg->ABdD", d2nablarho_dAdB_orbital_response, weight_depsilon_dnablarho[:, g0:g1])
+            ref_d2E_dAdB_full_response += einsum("ABdDxg,xg->ABdD", d2nablarho_dAdB_orbital_response + d2nablarho_dAdB_grid_response, weight_depsilon_dnablarho[:, g0:g1])
+            ref_d2E_dAdB_orbital_response += einsum("ABdDxg,xg->ABdD", d2nablarho_dAdB_orbital_response, weight_depsilon_dnablarho[:, g0:g1])
             ref_d2E_dAdB_full_response += (d2tau_dAdB_orbital_response + d2tau_dAdB_grid_response) @ weight_depsilon_dtau[g0:g1]
             ref_d2E_dAdB_orbital_response += d2tau_dAdB_orbital_response @ weight_depsilon_dtau[g0:g1]
 

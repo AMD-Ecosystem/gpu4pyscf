@@ -20,7 +20,7 @@ from pyscf.scf import ghf as ghf_cpu
 from pyscf.data.nist import HARTREE2EV
 from gpu4pyscf.scf import hf, uhf
 from gpu4pyscf.lib import logger
-from gpu4pyscf.lib.cupy_helper import asarray, return_cupy_array, tag_array
+from gpu4pyscf.lib.cupy_helper import asarray, return_cupy_array, tag_array, einsum
 from gpu4pyscf.lib import utils
 
 def _from_rhf_init_dm(dma, breaksym=False):
@@ -276,11 +276,11 @@ class GHF(hf.SCF):
         nocc_a = saa.trace().real
         nocc_b = sbb.trace().real
         ssxy = (nocc_a+nocc_b) * .5
-        ssxy+= (sba.trace() * sab.trace() - cp.einsum('ij,ji->', sba, sab)).real
+        ssxy+= (sba.trace() * sab.trace() - einsum('ij,ji->', sba, sab)).real
         ssz  = (nocc_a+nocc_b) * .25
         ssz += (nocc_a-nocc_b)**2 * .25
         tmp  = saa - sbb
-        ssz -= cp.einsum('ij,ji->', tmp, tmp).real * .25
+        ssz -= einsum('ij,ji->', tmp, tmp).real * .25
         ss = float(ssxy.get()) + ssz
         s = (ss+.25)**.5 - .5
         return ss, s*2+1

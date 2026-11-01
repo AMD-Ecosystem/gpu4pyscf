@@ -19,6 +19,7 @@ from gpu4pyscf.lib import logger
 from gpu4pyscf.dft.numint import NumInt
 from gpu4pyscf.solvent.pcm import natm_without_ghost
 from pyscf.data.elements import charge as elements_proton
+from gpu4pyscf.lib.cupy_helper import einsum
 
 MBIS_REMOVE_ZERO_RHO_GRID_THRESHOLD = 1e-10
 
@@ -1570,14 +1571,14 @@ def properties_from_partition(mol, log, partitioned_w_rho, atom_grid_vecrij, par
     for i_atom in range(mol.natm):
         log.info(f"{mol.elements[i_atom]:2s}  {charges[i_atom]:13.8f}")
 
-    dipoles = -cp.einsum("Ag,Agx->Ax", partitioned_w_rho, atom_grid_vecrij)
+    dipoles = -einsum("Ag,Agx->Ax", partitioned_w_rho, atom_grid_vecrij)
 
     log.info(f"{partition_name} Dipole x y z (a.u.)")
     for i_atom in range(mol.natm):
         log.info(f"{mol.elements[i_atom]:2s}  {dipoles[i_atom, 0]:13.8f}  {dipoles[i_atom, 1]:13.8f}  {dipoles[i_atom, 2]:13.8f}")
 
     # ORCA did not remove trace, and we follow them
-    quadrupoles = -cp.einsum("Ag,Agx,Agy->Axy", partitioned_w_rho, atom_grid_vecrij, atom_grid_vecrij)
+    quadrupoles = -einsum("Ag,Agx,Agy->Axy", partitioned_w_rho, atom_grid_vecrij, atom_grid_vecrij)
 
     log.info(f"{partition_name} Quadrupole xx yy zz xy xz yz (a.u.)")
     for i_atom in range(mol.natm):
@@ -1587,7 +1588,7 @@ def properties_from_partition(mol, log, partitioned_w_rho, atom_grid_vecrij, par
                  f"{0.5 * (quadrupoles[i_atom, 1, 2] + quadrupoles[i_atom, 2, 1]):13.8f}")
 
     # ORCA did not remove trace, and we follow them
-    octupoles = -cp.einsum("Ag,Agx,Agy,Agz->Axyz", partitioned_w_rho, atom_grid_vecrij, atom_grid_vecrij, atom_grid_vecrij)
+    octupoles = -einsum("Ag,Agx,Agy,Agz->Axyz", partitioned_w_rho, atom_grid_vecrij, atom_grid_vecrij, atom_grid_vecrij)
 
     log.info(f"{partition_name} Octupole xxx yyy zzz xxy xxz xyy xyz xzz yyz yzz (a.u.)")
     octupole_xyz_term = octupoles[i_atom, 0, 1, 2] + octupoles[i_atom, 0, 2, 1] + octupoles[i_atom, 1, 0, 2] \
@@ -1606,9 +1607,9 @@ def properties_from_partition(mol, log, partitioned_w_rho, atom_grid_vecrij, par
     atom_grid_rij = cp.linalg.norm(atom_grid_vecrij, axis=2)
     del atom_grid_vecrij
 
-    r2_moment = cp.einsum("Ag,Ag->A", partitioned_w_rho, atom_grid_rij**2)
-    r3_moment = cp.einsum("Ag,Ag->A", partitioned_w_rho, atom_grid_rij**3)
-    r4_moment = cp.einsum("Ag,Ag->A", partitioned_w_rho, atom_grid_rij**4)
+    r2_moment = einsum("Ag,Ag->A", partitioned_w_rho, atom_grid_rij**2)
+    r3_moment = einsum("Ag,Ag->A", partitioned_w_rho, atom_grid_rij**3)
+    r4_moment = einsum("Ag,Ag->A", partitioned_w_rho, atom_grid_rij**4)
 
     log.info(f"{partition_name} radial moments <r^2> <r^3> <r^4> (a.u.)")
     for i_atom in range(mol.natm):

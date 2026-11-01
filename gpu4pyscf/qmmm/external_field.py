@@ -22,6 +22,7 @@ from pyscf import lib
 import gpu4pyscf
 from gpu4pyscf.lib import logger
 from gpu4pyscf.grad.rhf import contract_h1e_dm
+from gpu4pyscf.lib.cupy_helper import einsum
 
 def add_external_field(scf_method, electric_field=None, origin=None):
     ''' Field and origin in AU '''
@@ -91,7 +92,7 @@ class EXTFSCF(EXTF):
         if self.electric_field is not None:
             with mol.with_common_orig(self.origin):
                 dipole_integral = cp.asarray(mol.intor('int1e_r'))
-            h1e += cp.einsum('d,dij->ij', self.electric_field, dipole_integral)
+            h1e += einsum('d,dij->ij', self.electric_field, dipole_integral)
 
         return h1e
 
@@ -162,7 +163,7 @@ class EXTFGrad:
                 dipole_integral_derivative = mol.intor('int1e_irp').reshape(3, 3, mol.nao, mol.nao).transpose(0,1,3,2)
                 dipole_integral_derivative = cp.asarray(dipole_integral_derivative)
 
-            dhcore -= cp.einsum('Edij,E->dij', dipole_integral_derivative, self.base.electric_field)
+            dhcore -= einsum('Edij,E->dij', dipole_integral_derivative, self.base.electric_field)
         return dhcore
 
     def extra_force(self, atom_id=None):
@@ -177,7 +178,7 @@ class EXTFGrad:
             dipole_integral_derivative = mol.intor('int1e_irp').reshape(3, 3, mol.nao, mol.nao).transpose(0,1,3,2)
             dipole_integral_derivative = cp.asarray(dipole_integral_derivative)
 
-        dhcore = cp.einsum('Edij,E->dij', dipole_integral_derivative, self.base.electric_field)
+        dhcore = einsum('Edij,E->dij', dipole_integral_derivative, self.base.electric_field)
         dm = self.base.make_rdm1()
         if dm.ndim == 3: #UHF
             dm = dm[0] + dm[1]

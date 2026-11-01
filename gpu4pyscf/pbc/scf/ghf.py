@@ -22,7 +22,7 @@ from pyscf import lib, __config__
 from pyscf.data import nist
 from pyscf.pbc.scf import ghf as ghf_cpu
 from gpu4pyscf.lib import logger, utils
-from gpu4pyscf.lib.cupy_helper import tag_array, return_cupy_array
+from gpu4pyscf.lib.cupy_helper import tag_array, return_cupy_array, einsum
 from gpu4pyscf.scf import ghf as mol_ghf
 from gpu4pyscf.scf import hf as mol_hf
 from gpu4pyscf.pbc.scf import hf as pbchf
@@ -212,7 +212,7 @@ class GHF(pbchf.SCF):
         vj, vk = self.get_jk(cell, dm, hermi, kpt, kpts_band)
         vhf = vj - vk
         if dm.ndim == 2 and kpts_band is None:
-            ecoul = float(cp.einsum('ij,ji->', dm, vj).real) * .5
+            ecoul = float(einsum('ij,ji->', dm, vj).real) * .5
             vhf = tag_array(vhf, ecoul=ecoul)
         return vhf
 

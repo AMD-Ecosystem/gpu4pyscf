@@ -20,7 +20,7 @@ from pyscf import lib, gto
 from pyscf import __config__
 from pyscf.dft.numint import NumInt as numint_cpu
 from gpu4pyscf.lib import logger
-from gpu4pyscf.lib.cupy_helper import contract, add_sparse
+from gpu4pyscf.lib.cupy_helper import contract, add_sparse, einsum
 from gpu4pyscf.grad import rhf as rhf_grad
 from gpu4pyscf.grad import tdrks as tdrks_grad
 from gpu4pyscf.df import int3c2e
@@ -49,9 +49,9 @@ def contract_veff_dm_batched(mol, veff_batch, dm_batch, hermi=0):
     dims = ao_loc[1:] - ao_loc[:-1]
     atm_id_for_ao = cp.asarray(np.repeat(mol._bas[:, gto.ATOM_OF], dims))
 
-    de_partial = cp.einsum('nxij, nji -> nix', veff_batch, dm_batch).real
+    de_partial = einsum('nxij, nji -> nix', veff_batch, dm_batch).real
     if hermi != 1:
-        de_partial += cp.einsum('nxij, nij -> nix', veff_batch, dm_batch).real
+        de_partial += einsum('nxij, nij -> nix', veff_batch, dm_batch).real
 
     atm_ids = cp.arange(natm)[:, None]
     mask = (atm_ids == atm_id_for_ao[None, :]).astype(de_partial.dtype)

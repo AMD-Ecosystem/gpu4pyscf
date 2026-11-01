@@ -22,7 +22,7 @@ import cupy as cp
 from pyscf import gto
 from gpu4pyscf.grad import rks as rks_grad
 from gpu4pyscf.dft.rkspu import _set_U, _make_minao_lo, reference_mol
-from gpu4pyscf.lib.cupy_helper import asarray, contract
+from gpu4pyscf.lib.cupy_helper import asarray, contract, einsum
 
 def generate_first_order_local_orbitals(mol, minao_ref='MINAO'):
     if isinstance(minao_ref, str):
@@ -117,7 +117,7 @@ def _hubbard_U_deriv1(mf, dm=None):
             P1 = dm_deriv1[:,i0:i1,i0:i1]
             dE_U[atm_id] += (val * 0.5) * (
                 cp.einsum('xii->x', P1).real * 2 # *2 for P1+P1.T
-                - cp.einsum('xij,ji->x', P1, P0).real * 2)
+                - einsum('xij,ji->x', P1, P0).real * 2)
     return dE_U.get()
 
 class Gradients(rks_grad.Gradients):

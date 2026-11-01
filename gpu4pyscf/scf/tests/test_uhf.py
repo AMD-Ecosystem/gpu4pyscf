@@ -25,6 +25,7 @@ except ImportError:
     dftd3 = dftd4 = None
 from gpu4pyscf.lib.multi_gpu import num_devices
 import pytest
+from gpu4pyscf.lib.cupy_helper import einsum
 
 def setUpModule():
     global mol, mol1
@@ -325,23 +326,23 @@ class KnownValues(unittest.TestCase):
 
         dm = mf.get_init_guess(key='minao')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 3
-        assert abs(cupy.einsum('nij,ji->n', dm, s).get() - (11.999383, 10.999434)).max() < 1e-6
+        assert abs(einsum('nij,ji->n', dm, s).get() - (11.999383, 10.999434)).max() < 1e-6
 
         dm = mf.get_init_guess(key='hcore')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 3
-        assert abs(cupy.einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
+        assert abs(einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
 
         dm = mf.get_init_guess(key='atom')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 3
-        assert abs(cupy.einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
+        assert abs(einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
 
         dm = mf.get_init_guess(key='huckel')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 3
-        assert abs(cupy.einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
+        assert abs(einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
 
         dm = mf.get_init_guess(key='mod_huckel')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 3
-        assert abs(cupy.einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
+        assert abs(einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
 
     # TODO:
     # test_init_guess_breaksym

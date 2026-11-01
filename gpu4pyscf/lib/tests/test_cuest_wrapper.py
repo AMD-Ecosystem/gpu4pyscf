@@ -26,7 +26,7 @@ from gpu4pyscf.dft.gen_grid import stratmann
 from gpu4pyscf.grad.rks import get_exc_full_response, get_nlc_exc_full_response
 from gpu4pyscf.grad.uks import get_exc_full_response as get_exc_full_response_uks
 from gpu4pyscf.solvent import pcm
-from gpu4pyscf.lib.cupy_helper import tag_array
+from gpu4pyscf.lib.cupy_helper import tag_array, einsum
 
 import pytest
 import unittest
@@ -1205,7 +1205,7 @@ class KnownValues(unittest.TestCase):
         test_j3c = mf.df_mo_integral(Cleft, Cright)
         assert test_j3c.shape == (naux, nao, nao)
 
-        test_J = cp.einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
+        test_J = einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
         test_K = cp.einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
 
         assert cp.max(cp.abs(test_J - ref_J)) < 1e-10
@@ -1249,7 +1249,7 @@ class KnownValues(unittest.TestCase):
         assert test_j3c.shape[1:] == (nao, nao)
         assert test_j3c.shape[0] < naux # Cuest uses spherical auxbasis, pyscf uses cartesian auxbasis
 
-        test_J = cp.einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
+        test_J = einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
         test_K = cp.einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
 
         assert cp.max(cp.abs(test_J - ref_J)) < 1e-1 # The different auxasis leads to very different J and K
@@ -1302,10 +1302,10 @@ class KnownValues(unittest.TestCase):
         test_j3c = mf.df_mo_integral(Cleft, Cright, omega = omega, lr_factor = lr_factor, sr_factor = sr_factor)
         assert test_j3c.shape == (naux, nao, nao)
 
-        ref_J = cp.einsum("pij,pkl,kl->ij", ref_j3c, ref_j3c, dm)
+        ref_J = einsum("pij,pkl,kl->ij", ref_j3c, ref_j3c, dm)
         ref_K = cp.einsum("pij,pkl,jl->ik", ref_j3c, ref_j3c, dm)
 
-        test_J = cp.einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
+        test_J = einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
         test_K = cp.einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
 
         assert cp.max(cp.abs(test_J - ref_J)) < 2e-8
@@ -1374,10 +1374,10 @@ class KnownValues(unittest.TestCase):
         test_j3c = mf.df_mo_integral(Cleft, Cright, omega = omega, lr_factor = lr_factor, sr_factor = sr_factor)
         assert test_j3c.shape == (naux, nao, nao)
 
-        ref_J = cp.einsum("pij,pkl,kl->ij", ref_j3c, ref_j3c, dm)
+        ref_J = einsum("pij,pkl,kl->ij", ref_j3c, ref_j3c, dm)
         ref_K = cp.einsum("pij,pkl,jl->ik", ref_j3c, ref_j3c, dm)
 
-        test_J = cp.einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
+        test_J = einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
         test_K = cp.einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
 
         assert cp.max(cp.abs(test_J - ref_J)) < 3e-8
@@ -1446,10 +1446,10 @@ class KnownValues(unittest.TestCase):
         test_j3c = mf.df_mo_integral(Cleft, Cright, omega = omega, lr_factor = lr_factor, sr_factor = sr_factor)
         assert test_j3c.shape == (naux, nao, nao)
 
-        ref_J = cp.einsum("pij,pkl,kl->ij", ref_j3c, ref_j3c, dm)
+        ref_J = einsum("pij,pkl,kl->ij", ref_j3c, ref_j3c, dm)
         ref_K = cp.einsum("pij,pkl,jl->ik", ref_j3c, ref_j3c, dm)
 
-        test_J = cp.einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
+        test_J = einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
         test_K = cp.einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
 
         assert cp.max(cp.abs(test_J - ref_J)) < 2e-8
@@ -1518,10 +1518,10 @@ class KnownValues(unittest.TestCase):
         test_j3c = mf.df_mo_integral(Cleft, Cright, omega = omega, lr_factor = lr_factor, sr_factor = sr_factor)
         assert test_j3c.shape == (naux, nao, nao)
 
-        ref_J = cp.einsum("pij,pkl,kl->ij", ref_j3c, ref_j3c, dm)
+        ref_J = einsum("pij,pkl,kl->ij", ref_j3c, ref_j3c, dm)
         ref_K = cp.einsum("pij,pkl,jl->ik", ref_j3c, ref_j3c, dm)
 
-        test_J = cp.einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
+        test_J = einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
         test_K = cp.einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
 
         assert cp.max(cp.abs(test_J - ref_J)) < 2e-8

@@ -15,7 +15,7 @@
 import unittest
 import numpy
 import cupy
-from gpu4pyscf.lib.cupy_helper import contract
+from gpu4pyscf.lib.cupy_helper import contract, einsum
 
 class KnownValues(unittest.TestCase):
     def test_contract(self):
@@ -27,13 +27,13 @@ class KnownValues(unittest.TestCase):
 
         a = cupy.random.rand(10,10,10,10)
         b = cupy.random.rand(20,20)
-        c_einsum = cupy.einsum('lkji,jl->ik', a, b[10:20,10:20])
+        c_einsum = einsum('lkji,jl->ik', a, b[10:20,10:20])
         c_contract = contract('lkji,jl->ik', a, b[10:20,10:20])
         assert cupy.linalg.norm(c_einsum - c_contract) < 1e-10
 
         a = cupy.random.rand(10,10,10,10)
         b = cupy.random.rand(20,20)
-        c_einsum = cupy.einsum('lkji,jk->il', a, b[10:20,10:20])
+        c_einsum = einsum('lkji,jk->il', a, b[10:20,10:20])
         c_contract = contract('lkji,jk->il', a, b[10:20,10:20])
         assert cupy.linalg.norm(c_einsum - c_contract) < 1e-10
 
@@ -49,11 +49,11 @@ class KnownValues(unittest.TestCase):
         b = cupy.random.rand(20,20)
 
         c = contract('ijkl,ik->jl', a, b)
-        c_einsum = cupy.einsum('ijkl,ik->jl', a, b)
+        c_einsum = einsum('ijkl,ik->jl', a, b)
         assert cupy.linalg.norm(c - c_einsum) < 1e-10
 
         c = contract('ijkl,jl->ik', a, b)
-        c_einsum = cupy.einsum('ijkl,jl->ik', a, b)
+        c_einsum = einsum('ijkl,jl->ik', a, b)
         assert cupy.linalg.norm(c - c_einsum) < 1e-10
 
     # issue 614

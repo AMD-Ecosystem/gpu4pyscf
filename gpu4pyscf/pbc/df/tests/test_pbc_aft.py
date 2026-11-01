@@ -22,7 +22,7 @@ from pyscf.pbc.df import aft as aft_cpu, aft_jk as aft_jk_cpu
 from pyscf.pbc.df import fft as fft_cpu
 from gpu4pyscf.pbc.df import aft, aft_jk
 from gpu4pyscf.pbc.df import fft
-from gpu4pyscf.lib.cupy_helper import tag_array
+from gpu4pyscf.lib.cupy_helper import tag_array, einsum
 from gpu4pyscf.pbc.grad.rhf import _finite_diff_cells
 from gpu4pyscf.pbc.dft.multigrid_v3 import MultiGridNumInt
 from gpu4pyscf.lib.multi_gpu import num_devices
@@ -503,10 +503,10 @@ class KnownValues(unittest.TestCase):
             cell1, cell2 = _finite_diff_cells(cell, i, j, disp=1e-4)
             mydf = aft.AFTDF(cell1, kpts=cell1.make_kpts(kmesh))
             vj = aft_jk.get_j_kpts(mydf, dm, hermi=1, kpts=mydf.kpts)
-            e1 = .5 * cp.einsum('kij,kji->', vj, dm).real / nkpts
+            e1 = .5 * einsum('kij,kji->', vj, dm).real / nkpts
             mydf = aft.AFTDF(cell2, kpts=cell2.make_kpts(kmesh))
             vj = aft_jk.get_j_kpts(mydf, dm, hermi=1, kpts=mydf.kpts)
-            e2 = .5 * cp.einsum('kij,kji->', vj, dm).real / nkpts
+            e2 = .5 * einsum('kij,kji->', vj, dm).real / nkpts
             assert abs(sigma[i,j] - (e1-e2)/2e-4) < 2e-7
 
     def test_ek_strain_deriv_gamma_point(self):
@@ -533,10 +533,10 @@ class KnownValues(unittest.TestCase):
             cell1, cell2 = _finite_diff_cells(cell, i, j, disp=1e-4)
             mydf = aft.AFTDF(cell1)
             vk = aft_jk.get_jk(mydf, dm, hermi=1, with_j=False, exxdiv=None)[1]
-            e1 = .5 * cp.einsum('ij,ji->', vk, dm).real
+            e1 = .5 * einsum('ij,ji->', vk, dm).real
             mydf = aft.AFTDF(cell2)
             vk = aft_jk.get_jk(mydf, dm, hermi=1, with_j=False, exxdiv=None)[1]
-            e2 = .5 * cp.einsum('ij,ji->', vk, dm).real
+            e2 = .5 * einsum('ij,ji->', vk, dm).real
             assert abs(sigma[i, j] - (e1-e2)/2e-4).max() < 2e-7
 
     def test_ek_strain_deriv_kpts(self):
@@ -563,10 +563,10 @@ class KnownValues(unittest.TestCase):
             cell1, cell2 = _finite_diff_cells(cell, i, j, disp=1e-4)
             mydf = aft.AFTDF(cell1, kpts=cell1.make_kpts(kmesh))
             vk = aft_jk.get_k_kpts(mydf, dm, hermi=1, kpts=mydf.kpts, exxdiv='ewald')
-            e1 = .5 * cp.einsum('kij,kji->', vk, dm).real / nkpts
+            e1 = .5 * einsum('kij,kji->', vk, dm).real / nkpts
             mydf = aft.AFTDF(cell2, kpts=cell2.make_kpts(kmesh))
             vk = aft_jk.get_k_kpts(mydf, dm, hermi=1, kpts=mydf.kpts, exxdiv='ewald')
-            e2 = .5 * cp.einsum('kij,kji->', vk, dm).real / nkpts
+            e2 = .5 * einsum('kij,kji->', vk, dm).real / nkpts
             assert abs(sigma[i, j] - (e1-e2)/2e-4).max() < 5e-7
 
     def test_ewald_strain_deriv(self):

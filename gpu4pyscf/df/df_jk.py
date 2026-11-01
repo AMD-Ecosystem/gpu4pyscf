@@ -30,7 +30,7 @@ from gpu4pyscf.dft import rks, uks, numint, gks
 from gpu4pyscf.scf import hf, uhf, rohf
 from gpu4pyscf.scf.jk import _check_rsh_factors
 from gpu4pyscf.scf import ghf
-from gpu4pyscf.lib.cupy_helper import asarray, ndarray, get_avail_mem
+from gpu4pyscf.lib.cupy_helper import asarray, ndarray, get_avail_mem, einsum
 from gpu4pyscf.lib import multi_gpu
 num_devices = multi_gpu.num_devices
 
@@ -343,8 +343,8 @@ class _DFHF:
                     vj = vj[0] + vj[1]
                     vxc += vj
                     vxc -= vk
-                    exc -= float(cupy.einsum('sij,sji->', dm, vk).real.get()) * .5
-                ecoul = float(cupy.einsum('sij,ji->', dm, vj).real.get()) * .5
+                    exc -= float(einsum('sij,sji->', dm, vk).real.get()) * .5
+                ecoul = float(einsum('sij,ji->', dm, vj).real.get()) * .5
 
             elif isinstance(self, hf.RHF):
                 rks.initialize_grids(self, mol, dm)
@@ -386,8 +386,8 @@ class _DFHF:
                         vk *= hyb
                     vxc += vj
                     vxc -= vk * .5
-                    exc -= float(cupy.einsum('ij,ji->', dm, vk).real.get()) * .25
-                ecoul = float(cupy.einsum('ij,ji->', dm, vj).real.get()) * .5
+                    exc -= float(einsum('ij,ji->', dm, vk).real.get()) * .25
+                ecoul = float(einsum('ij,ji->', dm, vj).real.get()) * .5
             elif isinstance(self, ghf.GHF):
                 if hermi == 2:  # because rho = 0
                     n, exc, vxc = 0, 0, 0
@@ -451,8 +451,8 @@ class _DFHF:
                         else:
                             raise ValueError(f'range_separated_mode = {range_separated_mode} is not supported')
                     vxc += vj - vk
-                    exc -= cupy.einsum('ij,ji->', dm, vk).real * .5
-                    ecoul = cupy.einsum('ij,ji->', dm, vj).real * .5
+                    exc -= einsum('ij,ji->', dm, vk).real * .5
+                    ecoul = einsum('ij,ji->', dm, vj).real * .5
             else:
                 raise NotImplementedError("DF only supports R/U/RO KS.")
             t0 = log.timer('veff', *t0)
@@ -462,17 +462,17 @@ class _DFHF:
             vj, vk = self.get_jk(mol, dm, hermi=hermi)
             vj = vj[0] + vj[1]
             vhf = vj - vk
-            ecoul = float(cp.einsum('sij,ji->', dm, vj).real.get()) * .5
+            ecoul = float(einsum('sij,ji->', dm, vj).real.get()) * .5
             return tag_array(vhf, ecoul=ecoul)
         elif isinstance(self, hf.RHF):
             vj, vk = self.get_jk(mol, dm, hermi=hermi)
             vhf = vj - vk * .5
-            ecoul = float(cp.einsum('ij,ji->', dm, vj).real.get()) * .5
+            ecoul = float(einsum('ij,ji->', dm, vj).real.get()) * .5
             return tag_array(vhf, ecoul=ecoul)
         elif isinstance(self, ghf.GHF): # GHF branch
             vj, vk = self.get_jk(mol, dm, hermi=hermi)
             vhf = vj - vk
-            ecoul = float(cp.einsum('ij,ji->', dm, vj).real.get()) * .5
+            ecoul = float(einsum('ij,ji->', dm, vj).real.get()) * .5
             return tag_array(vhf, ecoul=ecoul)
         else:
             raise NotImplementedError("DF only supports R/U/RO/G HF.")

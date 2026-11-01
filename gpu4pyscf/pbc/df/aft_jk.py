@@ -33,7 +33,7 @@ from gpu4pyscf.pbc.tools.k2gamma import kpts_to_kmesh
 from gpu4pyscf.pbc.df.ft_ao import FTOpt, libpbc
 from gpu4pyscf.pbc.df.fft_jk import (
     _format_dms, _format_jks, _ewald_exxdiv_for_G0, _factorize_dm)
-from gpu4pyscf.lib.cupy_helper import contract, get_avail_mem, asarray, ndarray
+from gpu4pyscf.lib.cupy_helper import contract, get_avail_mem, asarray, ndarray, einsum
 from gpu4pyscf.lib import logger
 from gpu4pyscf.gto.mole import SortedCell
 from gpu4pyscf.scf.jk import SHM_SIZE, _check_rsh_factors
@@ -477,7 +477,7 @@ def get_ej_derivatives(mydf, dm, kpts=None, omega=None):
         Gpq = ft_kern(Gv[p0:p1])
         Gpq = Gpq.transpose(0,2,3,1)
         rhoG = contract('kji,kijg->g', dms, Gpq)
-        ej_sigma[-3:] += .25*cp.einsum('xyg,g,g->xy', wcoulG_1[:,:,p0:p1], rhoG.conj(), rhoG).real
+        ej_sigma[-3:] += .25*einsum('xyg,g,g->xy', wcoulG_1[:,:,p0:p1], rhoG.conj(), rhoG).real
 
         vG = rhoG.conj()
         vG *= wcoulG_0[p0:p1]
@@ -614,7 +614,7 @@ def get_ek_derivatives(mydf, dm, kpts=None, exxdiv=None,
             if is_gamma_point:
                 tmp = contract('sjk,lkg->sjlg', dms[:,0], pqG_conj[0])
                 dm_vG = contract('sjlg,sli->jig', tmp, dms[:,0])
-                vkG = cp.einsum('pqg,qpg->g', dm_vG, pqG[0]).real
+                vkG = einsum('pqg,qpg->g', dm_vG, pqG[0]).real
                 if ft_opt.permutation_symmetry:
                     dm_vG *= 2
             else:
@@ -658,8 +658,8 @@ def get_ek_derivatives(mydf, dm, kpts=None, exxdiv=None,
                 # output. Removing the following transformation if this is true.
                 if ft_opt.permutation_symmetry:
                     dm_vG += contract('Lk,kjig->Lijg', expLk[:,idx].conj(), dm_k)
-                vkG = cp.einsum('njig,nijg->g', dm_k, pqG).real
-            tmp = cp.einsum('xyg,g->xy', wcoulG_1[:,:,p0:p1], vkG)
+                vkG = einsum('njig,nijg->g', dm_k, pqG).real
+            tmp = einsum('xyg,g->xy', wcoulG_1[:,:,p0:p1], vkG)
             if swap_2e:
                 sigma += tmp * 2
                 dm_vG *= wcoulG_0[p0:p1] * 2

@@ -20,7 +20,7 @@ import cupy as cp
 from pyscf.data import nist
 from pyscf.gto.mole import conc_mol
 from gpu4pyscf.gto.int3c1e import int1e_grids
-from gpu4pyscf.lib.cupy_helper import contract
+from gpu4pyscf.lib.cupy_helper import contract, einsum
 from gpu4pyscf.lib.cupy_helper import eigh as generalized_eigh
 from cupyx.scipy.sparse.linalg import LinearOperator, cg
 from cupyx.scipy.linalg import expm as matrix_exp
@@ -86,7 +86,7 @@ def _get_total_system_xc_energy(mf_sum, dm):
     if mf_sum.do_disp():
         E_j_plus_xc += mf_sum.get_dispersion()
     J = mf_sum.get_j(mf_sum.mol, dm, hermi = 1)
-    E_j = 0.5 * cp.einsum('ij,ji->', J, dm)
+    E_j = 0.5 * einsum('ij,ji->', J, dm)
     return float(E_j_plus_xc - E_j)
 
 def _get_fragment_xc_energy_sum(mf_sum, mf_list, nocc_offsets, mocc_sum):
@@ -101,7 +101,7 @@ def _get_fragment_xc_energy_sum(mf_sum, mf_list, nocc_offsets, mocc_sum):
         if mf_sum.do_disp():
             E_j_plus_xc_i += mf_list[i_frag].get_dispersion()
         J_i = mf_sum.get_j(mf_sum.mol, D_i, hermi = 1)
-        E_j_i = 0.5 * cp.einsum('ij,ji->', J_i, D_i)
+        E_j_i = 0.5 * einsum('ij,ji->', J_i, D_i)
         D_i = None
         E_sum += E_j_plus_xc_i - E_j_i
     return E_sum

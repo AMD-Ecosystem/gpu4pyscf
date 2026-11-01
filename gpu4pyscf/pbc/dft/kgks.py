@@ -20,7 +20,7 @@ import cupy as cp
 from pyscf import lib, __config__
 from pyscf.pbc.dft import kgks as kgks_cpu
 from gpu4pyscf.lib import logger, utils
-from gpu4pyscf.lib.cupy_helper import tag_array
+from gpu4pyscf.lib.cupy_helper import tag_array, einsum
 from gpu4pyscf.pbc.scf import kghf
 from gpu4pyscf.pbc.dft import rks, krks, gks, multigrid
 from gpu4pyscf.pbc.dft.numint2c import KNumInt2C
@@ -104,10 +104,10 @@ def get_veff(ks, cell=None, dm=None, dm_last=None, vhf_last=None, hermi=1,
         vxc += vj - vk
 
         if ground_state:
-            exc -= cp.einsum('Kij,Kji', dm, vk).real * .5
+            exc -= einsum('Kij,Kji', dm, vk).real * .5
 
     if ground_state:
-        ecoul = float(cp.einsum('Kij,Kji', dm, vj).real) * .5 * weight
+        ecoul = float(einsum('Kij,Kji', dm, vj).real) * .5 * weight
     else:
         ecoul = None
 

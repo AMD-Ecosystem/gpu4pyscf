@@ -29,6 +29,7 @@ from gpu4pyscf.dft.numint import eval_rho2
 from gpu4pyscf.lib.cupy_helper import (
     contract, get_avail_mem, add_sparse, tag_array, reduce_to_device,
     take_last2d, ndarray)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.lib import logger
 from gpu4pyscf.__config__ import num_devices
 from gpu4pyscf import __config__
@@ -163,11 +164,11 @@ def _get_exc_task(ni, mol, grids, xc_code, dms, mo_coeff, mo_occ,
                 aow = numint._scale_ao(ao_mask[0], wv[0], out=aow_buf)
                 vtmp = rks_grad._d1_dot_(ao_mask[1:4], aow.T, out=vtmp_buf)
                 dm_mask = take_last2d(dms[0], idx, out=dm_mask_buf)
-                exc1[idx] += cupy.einsum('nij,ij->ni', vtmp, dm_mask).T
+                exc1[idx] += einsum('nij,ij->ni', vtmp, dm_mask).T
                 aow = numint._scale_ao(ao_mask[0], wv[1], out=aow)
                 vtmp = rks_grad._d1_dot_(ao_mask[1:4], aow.T, out=vtmp_buf)
                 dm_mask = take_last2d(dms[1], idx, out=dm_mask)
-                exc1[idx] += cupy.einsum('nij,ij->ni', vtmp, dm_mask).T
+                exc1[idx] += einsum('nij,ij->ni', vtmp, dm_mask).T
         elif xctype == 'GGA':
             ao_deriv = 2
             aow_buf = cupy.empty(MIN_BLK_SIZE * max(nao * 3, 2*nocc))
@@ -187,11 +188,11 @@ def _get_exc_task(ni, mol, grids, xc_code, dms, mo_coeff, mo_occ,
                 vtmp = rks_grad._gga_grad_sum_(ao_mask, wv[0], buf=aow_buf, out=vtmp_buf)
                 #add_sparse(vmat[0], vtmp, idx)
                 dm_mask = take_last2d(dms[0], idx, out=dm_mask_buf)
-                exc1[idx] += cupy.einsum('nij,ij->ni', vtmp, dm_mask).T
+                exc1[idx] += einsum('nij,ij->ni', vtmp, dm_mask).T
                 vtmp = rks_grad._gga_grad_sum_(ao_mask, wv[1], buf=aow_buf, out=vtmp_buf)
                 #add_sparse(vmat[1], vtmp, idx)
                 dm_mask = take_last2d(dms[1], idx, out=dm_mask)
-                exc1[idx] += cupy.einsum('nij,ij->ni', vtmp, dm_mask).T
+                exc1[idx] += einsum('nij,ij->ni', vtmp, dm_mask).T
         elif xctype == 'NLC':
             raise NotImplementedError('NLC')
 
@@ -216,12 +217,12 @@ def _get_exc_task(ni, mol, grids, xc_code, dms, mo_coeff, mo_occ,
                 vtmp = rks_grad._tau_grad_dot_(ao_mask, wv[0,4], accumulate=True, buf=aow_buf, out=vtmp)
                 #add_sparse(vmat[0], vtmp, idx)
                 dm_mask = take_last2d(dms[0], idx, out=dm_mask_buf)
-                exc1[idx] += cupy.einsum('nij,ij->ni', vtmp, dm_mask).T
+                exc1[idx] += einsum('nij,ij->ni', vtmp, dm_mask).T
                 vtmp = rks_grad._gga_grad_sum_(ao_mask, wv[1], buf=aow_buf, out=vtmp_buf)
                 vtmp = rks_grad._tau_grad_dot_(ao_mask, wv[1,4], accumulate=True, buf=aow_buf, out=vtmp)
                 #add_sparse(vmat[1], vtmp, idx)
                 dm_mask = take_last2d(dms[1], idx, out=dm_mask)
-                exc1[idx] += cupy.einsum('nij,ij->ni', vtmp, dm_mask).T
+                exc1[idx] += einsum('nij,ij->ni', vtmp, dm_mask).T
         log.timer_debug1('uks gradient of vxc', *t0)
     return exc1
 
@@ -355,13 +356,13 @@ def get_exc_full_response(ni, mol, grids, xc_code, dms, relativity=0, hermi=1,
             vtmp = rks_grad._d1_dot_(ao[1:4], aow.T)
             dvmat_orbital_response[0][:, idx[:,None], idx] += vtmp
             dma_masked = take_last2d(dms[0], idx, out=dm_mask_buf)
-            de_grid_response_rho[i_atom] += cupy.einsum('xij,ji->x', vtmp, dma_masked) * 2
+            de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp, dma_masked) * 2
 
             aow = numint._scale_ao(ao[0], split_wv[1, 0])
             vtmp = rks_grad._d1_dot_(ao[1:4], aow.T)
             dvmat_orbital_response[1][:, idx[:,None], idx] += vtmp
             dmb_masked = take_last2d(dms[1], idx, out=dm_mask_buf)
-            de_grid_response_rho[i_atom] += cupy.einsum('xij,ji->x', vtmp, dmb_masked) * 2
+            de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp, dmb_masked) * 2
 
         elif xctype == 'GGA':
             split_wv = cupy.ascontiguousarray(wv[:, :, g0:g1][:, :, nonzero_weight_mask[g0:g1]])
@@ -370,12 +371,12 @@ def get_exc_full_response(ni, mol, grids, xc_code, dms, relativity=0, hermi=1,
             vtmp = rks_grad._gga_grad_sum_(ao, split_wv[0])
             dvmat_orbital_response[0][:, idx[:,None], idx] += vtmp
             dma_masked = take_last2d(dms[0], idx, out=dm_mask_buf)
-            de_grid_response_rho[i_atom] += cupy.einsum('xij,ji->x', vtmp, dma_masked) * 2
+            de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp, dma_masked) * 2
 
             vtmp = rks_grad._gga_grad_sum_(ao, split_wv[1])
             dvmat_orbital_response[1][:, idx[:,None], idx] += vtmp
             dmb_masked = take_last2d(dms[1], idx, out=dm_mask_buf)
-            de_grid_response_rho[i_atom] += cupy.einsum('xij,ji->x', vtmp, dmb_masked) * 2
+            de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp, dmb_masked) * 2
 
         elif xctype == 'NLC':
             raise ValueError("You see a bug, please report to the developer team.")
@@ -389,13 +390,13 @@ def get_exc_full_response(ni, mol, grids, xc_code, dms, relativity=0, hermi=1,
             rks_grad._tau_grad_dot_(ao, split_wv[0, 4], accumulate=True, out=vtmp)
             dvmat_orbital_response[0][:, idx[:,None], idx] += vtmp
             dma_masked = take_last2d(dms[0], idx, out=dm_mask_buf)
-            de_grid_response_rho[i_atom] += cupy.einsum('xij,ji->x', vtmp, dma_masked) * 2
+            de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp, dma_masked) * 2
 
             vtmp = rks_grad._gga_grad_sum_(ao, split_wv[1, :4])
             rks_grad._tau_grad_dot_(ao, split_wv[1, 4], accumulate=True, out=vtmp)
             dvmat_orbital_response[1][:, idx[:,None], idx] += vtmp
             dmb_masked = take_last2d(dms[1], idx, out=dm_mask_buf)
-            de_grid_response_rho[i_atom] += cupy.einsum('xij,ji->x', vtmp, dmb_masked) * 2
+            de_grid_response_rho[i_atom] += einsum('xij,ji->x', vtmp, dmb_masked) * 2
 
         else:
             raise NotImplementedError(f"Unrecognized xctype = {xctype}")

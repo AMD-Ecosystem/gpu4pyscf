@@ -24,7 +24,7 @@ from pyscf.data import nist
 from pyscf.pbc.scf import kghf as kghf_cpu
 from pyscf.pbc.scf import addons, chkfile as chkfile_cpu, kuhf as kuhf_cpu
 from gpu4pyscf.lib import logger, utils
-from gpu4pyscf.lib.cupy_helper import tag_array
+from gpu4pyscf.lib.cupy_helper import tag_array, einsum
 from gpu4pyscf.scf import hf as mol_hf
 from gpu4pyscf.scf import ghf as mol_ghf
 from gpu4pyscf.pbc.scf import khf, ghf
@@ -140,7 +140,7 @@ class KGHF(khf.KSCF):
 
         if s1e is None:
             s1e = self.get_ovlp(cell, self.kpts)
-        ne = float(cp.einsum('kij,kji->', dm, s1e).real)
+        ne = float(einsum('kij,kji->', dm, s1e).real)
         nelectron = float(cell.tot_electrons(nkpts))
         if abs(ne - nelectron) > 0.01*nkpts:
             logger.debug(self, 'Normalizing initial guess from %g to %g electrons per cell',
@@ -230,7 +230,7 @@ class KGHF(khf.KSCF):
         vhf = vj - vk
         if dm_kpts.ndim == 3 and kpts_band is None:
             nkpts = len(dm_kpts)
-            ecoul = float(cp.einsum('Kij,Kji->', dm_kpts, vj).real) * .5/nkpts
+            ecoul = float(einsum('Kij,Kji->', dm_kpts, vj).real) * .5/nkpts
             vhf = tag_array(vhf, ecoul=ecoul)
         return vhf
 

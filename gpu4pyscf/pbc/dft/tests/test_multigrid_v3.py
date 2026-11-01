@@ -33,6 +33,7 @@ from gpu4pyscf.pbc.dft import KUKS as KUKS_gpu
 from gpu4pyscf.pbc.lib.kpts_helper import fft_matrix
 
 import pytest
+from gpu4pyscf.lib.cupy_helper import einsum
 
 def setUpModule():
     global cell_orth, cell_nonorth, cell_he
@@ -94,7 +95,7 @@ def _get_vpplocG_derivatives(cell, mesh, rhoG):
     Gx, Gy, Gz = Gv_bases
     GvT = Gx[:,:,None,None] + Gy[:,None,:,None] + Gz[:,None,None,:]
     GvT = GvT.reshape(3, ngrids)
-    G2 = cp.einsum('xg,xg->g', GvT, GvT)
+    G2 = einsum('xg,xg->g', GvT, GvT)
     coulG = 4 * np.pi / G2
     coulG[0] = 0
     xyG = cp.einsum('xg,yg->xyg', GvT, GvT)
@@ -183,11 +184,11 @@ def eval_nucG_SI_gradient(cell, mesh, rho_g):
         ZSI -= charges[i_atom] * SI
 
     coulGxy = cp.einsum('gx,gy->xyg', Gv, Gv)
-    G2 = cp.einsum('gx,gx->g', Gv, Gv)
+    G2 = einsum('gx,gx->g', Gv, Gv)
     G2[0] = np.inf
     coulGxy *= coulG
     coulG_1 = coulGxy * -2/G2
-    sigma = cp.einsum('xyg,g,g->xy', coulG_1, rho_g.conj(), ZSI).real
+    sigma = einsum('xyg,g,g->xy', coulG_1, rho_g.conj(), ZSI).real
 
     de = de.real
     de /= cell.vol
@@ -1235,7 +1236,7 @@ class KnownValues(unittest.TestCase):
         rhoG = cp.fft.ifft(rho).ravel()
 
         grad_ref, vlocG0, vlocG1 = _get_vpplocG_derivatives(cell, mesh, rhoG)
-        sigma_ref = cp.einsum('g,xyg->xy', rhoG.conj(), vlocG1).real / cell.vol
+        sigma_ref = einsum('g,xyg->xy', rhoG.conj(), vlocG1).real / cell.vol
 
         Gv_bases = _get_Gv_bases(mesh, cell.reciprocal_vectors())
         grad_sigma = _pploc_derivatives(cell, rhoG, Gv_bases)

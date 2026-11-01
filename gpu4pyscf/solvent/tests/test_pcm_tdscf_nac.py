@@ -22,6 +22,7 @@ from pyscf import lib, gto, scf
 from gpu4pyscf import tdscf, nac, dft
 from gpu4pyscf.solvent.tdscf.pcm import WithSolventTDSCFNacMethod
 from gpu4pyscf.grad.tests.test_tdrhf_grad import diagonalize_tda
+from gpu4pyscf.lib.cupy_helper import einsum
 
 atom = """
 O       0.0000000000     0.0000000000     0.0000000000
@@ -131,7 +132,7 @@ def get_nacv_ge(td_nac, x_yI, delta=0.001, singlet=True, atmlst=None, method='CP
         ds1_tmp = s12_deriv_tmp.transpose(0,2,1)
         ds1_tmp[:,:,:p0] = 0
         ds1_tmp[:,:,p1:] = 0
-        nac2[k] = cp.einsum('xij,ij->x', ds1_tmp, gamma_ao).get()
+        nac2[k] = einsum('xij,ij->x', ds1_tmp, gamma_ao).get()
     return nac_fdiff - nac2
 
 
@@ -197,7 +198,7 @@ def get_nacv_ee(td_nac, x_yI, x_yJ, nJ, delta=0.001, singlet=True, atmlst=None, 
         ds1_tmp = s12_deriv_tmp.transpose(0,2,1)
         ds1_tmp[:,:,:p0] = 0
         ds1_tmp[:,:,p1:] = 0
-        nac2[k] = cp.einsum('xij,ij->x', ds1_tmp, gamma_ao).get()
+        nac2[k] = einsum('xij,ij->x', ds1_tmp, gamma_ao).get()
     return nac_num - nac2 + nac3
 
 

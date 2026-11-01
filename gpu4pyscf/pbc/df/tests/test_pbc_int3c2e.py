@@ -22,7 +22,7 @@ from gpu4pyscf.pbc.df import int3c2e
 from gpu4pyscf.gto.mole import SortedCell
 from gpu4pyscf.pbc.df.int3c2e import sr_aux_e2, fill_triu_bvk
 from gpu4pyscf.pbc.df.int2c2e import sr_int2c2e
-from gpu4pyscf.lib.cupy_helper import contract
+from gpu4pyscf.lib.cupy_helper import contract, einsum
 from gpu4pyscf.pbc.lib.kpts_helper import conj_images_in_bvk_cell
 
 
@@ -268,13 +268,13 @@ C    D
     jaux = opt.contract_dm(opt.cell.apply_C_mat_CT(dm))
 
     j3c = sr_aux_e2(cell, auxcell, omega)
-    ref = cp.einsum('pqr,qp->r', j3c, dm)
+    ref = einsum('pqr,qp->r', j3c, dm)
     assert abs(jaux - ref).max() < 1e-9
 
     np.random.seed(9)
     auxvec = cp.asarray(np.random.rand(auxcell.nao))
     vj = opt.contract_auxvec(opt.auxcell.apply_C_dot(auxvec))
-    ref = cp.einsum('pqr,r->pq', j3c, auxvec)
+    ref = einsum('pqr,r->pq', j3c, auxvec)
     assert abs(vj - ref).max() < 1e-10
 
 def test_contract_dm_kpts():
@@ -319,13 +319,13 @@ C    D
     jaux = opt.contract_dm(opt.cell.apply_C_mat_CT(dm), kpts=kpts)
 
     j3c = sr_aux_e2(cell, auxcell, omega, kpts, kmesh, j_only=True)
-    ref = cp.einsum('kpqr,kqp->r', j3c, dm) / nkpts
+    ref = einsum('kpqr,kqp->r', j3c, dm) / nkpts
     assert abs(jaux - ref).max() < 3e-10
 
     np.random.seed(9)
     auxvec = np.random.rand(auxcell.nao)
     vj = opt.contract_auxvec(opt.auxcell.apply_C_dot(auxvec), kpts=kpts)
-    ref = cp.einsum('kpqr,r->kpq', j3c, cp.asarray(auxvec))  # auxvec is host data
+    ref = einsum('kpqr,r->kpq', j3c, cp.asarray(auxvec))  # auxvec is host data
     assert abs(vj - ref).max() < 1e-10
 
 def test_int3c2e_batch_evaluation():
@@ -455,6 +455,6 @@ def test_int2c2e_strain_deriv_vs_finite_difference():
     disp = 1e-4
     for (i, j) in [(0, 0), (0, 1), (0, 2), (1, 0), (2, 2)]:
         cell1, cell2 = _finite_diff_cells(cell, i, j, disp=disp)
-        e1 = .5 * cp.einsum('ij,ji->', dm, int2c2e.sr_int2c2e(cell1, omega))
-        e2 = .5 * cp.einsum('ij,ji->', dm, int2c2e.sr_int2c2e(cell2, omega))
+        e1 = .5 * einsum('ij,ji->', dm, int2c2e.sr_int2c2e(cell1, omega))
+        e2 = .5 * einsum('ij,ji->', dm, int2c2e.sr_int2c2e(cell2, omega))
         assert abs(dat[i,j] - (e1-e2)/disp/2) < 1e-6
