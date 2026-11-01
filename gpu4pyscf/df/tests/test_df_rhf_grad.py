@@ -270,7 +270,7 @@ class KnownValues(unittest.TestCase):
         mo_occ[0,:nocc+1] = 1
         mo_occ[1,:nocc] = 1
         opt = int3c2e.Int3c2eOpt(mol, auxmol).build()
-        dm = cp.einsum('spi,si,sqi->spq', mo_coeff, mo_occ, mo_coeff)
+        dm = einsum('spi,si,sqi->spq', mo_coeff, mo_occ, mo_coeff)
         ek = _jk_energy_per_atom(opt, dm, j_factor=1, k_factor=1, hermi=1)
         assert abs(lib.fp(ek) - -43.07892861949899) < 1e-9
         assert abs(ek.sum(axis=0)).max() < 3e-11
@@ -314,7 +314,7 @@ class KnownValues(unittest.TestCase):
         mol0.omega = .15
         auxmol0.omega = .15
         opt = int3c2e.Int3c2eOpt(mol0, auxmol0).build()
-        dm = np.einsum('spi,si,sqi->spq', mo_coeff, mo_occ, mo_coeff)
+        dm = einsum('spi,si,sqi->spq', mo_coeff, mo_occ, mo_coeff)
         ek = _jk_energy_per_atom(opt, dm, j_factor=1, k_factor=1, hermi=1)
         assert abs(ek.sum(axis=0)).max() < 1e-12
 

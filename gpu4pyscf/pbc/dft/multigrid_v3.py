@@ -2443,7 +2443,7 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
             vxc = vxc.reshape(n_dm, nvar, ngrids)
             density = density.reshape(n_dm, nvar, ngrids)
             for s in range(n_dm):
-                sigma -= cp.einsum('xg,yg->xy', density[s,1:4], vxc[s,1:4])
+                sigma -= einsum('xg,yg->xy', density[s,1:4], vxc[s,1:4])
 
         vxc = vxc.reshape(n_dm, nvar, *mesh)
 

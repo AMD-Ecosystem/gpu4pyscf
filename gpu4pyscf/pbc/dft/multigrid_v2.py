@@ -2063,7 +2063,7 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
             coulG = pbc_tools.get_coulG(cell, Gv=Gv)
             coulomb_on_g_mesh = rho1[:,0] * coulG
         rho1 = ifft_in_place(rho1.reshape(-1, *mesh)).real.reshape(nset, -1, ngrids)
-        wv = cp.einsum('nxg,xyg->nyg', rho1, fxc)
+        wv = einsum('nxg,xyg->nyg', rho1, fxc)
         wv = fft_in_place(wv.reshape(-1, *mesh)).reshape(wv.shape)
 
         if with_j:
@@ -2130,7 +2130,7 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
             coulG = pbc_tools.get_coulG(cell, Gv=Gv)
             coulomb_on_g_mesh = rho1[:,0].reshape(2, nset, ngrids).sum(axis=0) * coulG
         rho1 = ifft_in_place(rho1.reshape(-1, *mesh)).real.reshape(2, nset, -1, ngrids)
-        wv = cp.einsum('anxg,axbyg->bnyg', rho1, fxc)
+        wv = einsum('anxg,axbyg->bnyg', rho1, fxc)
         wv = fft_in_place(wv.reshape(-1, *mesh)).reshape(wv.shape)
 
         if with_j:

@@ -21,7 +21,7 @@ class KnownValues(unittest.TestCase):
     def test_contract(self):
         a = cupy.random.rand(10,9,11)
         b = cupy.random.rand(11,7,13)
-        c_einsum = cupy.einsum('ijk,ikl->jl', a[3:9,:,4:10], b[3:9,:6, 7:13])
+        c_einsum = einsum('ijk,ikl->jl', a[3:9,:,4:10], b[3:9,:6, 7:13])
         c_contract = contract('ijk,ikl->jl', a[3:9,:,4:10], b[3:9,:6, 7:13])
         assert cupy.linalg.norm(c_einsum - c_contract) < 1e-10
 
@@ -40,7 +40,7 @@ class KnownValues(unittest.TestCase):
     def test_complex_valued(self):
         a = cupy.random.rand(10,9,11) + cupy.random.rand(10,9,11)*1j
         b = cupy.random.rand(11,7,13) + cupy.random.rand(11,7,13)*1j
-        c_einsum = cupy.einsum('ijk,ikl->jl', a[3:9,:,4:10], b[3:9,:6, 7:13])
+        c_einsum = einsum('ijk,ikl->jl', a[3:9,:,4:10], b[3:9,:6, 7:13])
         c_contract = contract('ijk,ikl->jl', a[3:9,:,4:10], b[3:9,:6, 7:13])
         assert cupy.linalg.norm(c_einsum - c_contract) < 1e-10
 
@@ -69,7 +69,7 @@ class KnownValues(unittest.TestCase):
         mat = cupy.random.rand(ncells, comp, nao, nao)
         out = _contract_einsum('lkz,lxpq->kxpqz', expLkz, mat, 1., 0.)
         assert out.flags.c_contiguous
-        ref = cupy.einsum('lkz,lxpq->kxpqz', expLkz, mat)
+        ref = einsum('lkz,lxpq->kxpqz', expLkz, mat)
         assert cupy.linalg.norm(out - ref) < 1e-12
         v = out.view(numpy.complex128)[:,:,:,:,0].reshape(nkpts*comp, nao, nao)
         hermi_triu(v, 1, inplace=True)
@@ -77,7 +77,7 @@ class KnownValues(unittest.TestCase):
         veff = cupy.random.rand(ncells, nao, nao)
         out = _contract_einsum('Lpq,Lkz->kpqz', veff, expLkz, 1., 0.)
         assert out.flags.c_contiguous
-        ref = cupy.einsum('Lpq,Lkz->kpqz', veff, expLkz)
+        ref = einsum('Lpq,Lkz->kpqz', veff, expLkz)
         assert cupy.linalg.norm(out - ref) < 1e-12
         v = out.view(numpy.complex128)[:,:,:,0]
         transpose_sum(v)

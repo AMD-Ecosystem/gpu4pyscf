@@ -30,6 +30,7 @@ from gpu4pyscf.grad import rhf as rhf_grad
 from gpu4pyscf.grad import rks as rks_grad
 from gpu4pyscf.dft import numint
 from gpu4pyscf.lib.cupy_helper import (contract, add_sparse, get_avail_mem, take_last2d)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.lib import logger
 from gpu4pyscf.__config__ import min_grid_blksize
 
@@ -1852,14 +1853,14 @@ def _get_vxc_deriv1_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
             dFock_ao_of_atom_i = dFock_orbital_response_dmudA_nu_term[:, :, ao_of_atom_i, :]
 
             dFock_ao_of_atom_i_mocc = dFock_ao_of_atom_i[0] @ mocca_sorted
-            dFock_mo_occa[i_atom, :, :, :] -= cupy.einsum("pi,dpj->dij", mo_coeff_sorted[0][ao_of_atom_i, :], dFock_ao_of_atom_i_mocc)
+            dFock_mo_occa[i_atom, :, :, :] -= einsum("pi,dpj->dij", mo_coeff_sorted[0][ao_of_atom_i, :], dFock_ao_of_atom_i_mocc)
             dFock_ao_of_atom_i_mocc = dFock_ao_of_atom_i[0].transpose(0,2,1) @ mocca_sorted[ao_of_atom_i]
-            dFock_mo_occa[i_atom, :, :, :] -= cupy.einsum("pi,dpj->dij", mo_coeff_sorted[0], dFock_ao_of_atom_i_mocc)
+            dFock_mo_occa[i_atom, :, :, :] -= einsum("pi,dpj->dij", mo_coeff_sorted[0], dFock_ao_of_atom_i_mocc)
 
             dFock_ao_of_atom_i_mocc = dFock_ao_of_atom_i[1] @ moccb_sorted
-            dFock_mo_occb[i_atom, :, :, :] -= cupy.einsum("pi,dpj->dij", mo_coeff_sorted[1][ao_of_atom_i, :], dFock_ao_of_atom_i_mocc)
+            dFock_mo_occb[i_atom, :, :, :] -= einsum("pi,dpj->dij", mo_coeff_sorted[1][ao_of_atom_i, :], dFock_ao_of_atom_i_mocc)
             dFock_ao_of_atom_i_mocc = dFock_ao_of_atom_i[1].transpose(0,2,1) @ moccb_sorted[ao_of_atom_i]
-            dFock_mo_occb[i_atom, :, :, :] -= cupy.einsum("pi,dpj->dij", mo_coeff_sorted[1], dFock_ao_of_atom_i_mocc)
+            dFock_mo_occb[i_atom, :, :, :] -= einsum("pi,dpj->dij", mo_coeff_sorted[1], dFock_ao_of_atom_i_mocc)
             del dFock_ao_of_atom_i_mocc, dFock_ao_of_atom_i
     del dFock_orbital_response_dmudA_nu_term
 

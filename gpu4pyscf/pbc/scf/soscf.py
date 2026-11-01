@@ -18,7 +18,7 @@ Second order SCF solver for PBC systems
 
 import cupy as cp
 from pyscf import lib
-from gpu4pyscf.lib.cupy_helper import contract, transpose_sum
+from gpu4pyscf.lib.cupy_helper import contract, transpose_sum, einsum
 from gpu4pyscf.scf import soscf as mol_soscf
 from gpu4pyscf.scf.soscf import _CIAH_SOSCF
 
@@ -74,8 +74,8 @@ def gen_g_hop_rhf(mf, mo_coeff, mo_occ, fock_ao, h1e=None):
             x2 = [None] * nkpts
             for k in range(nkpts):
                 x2[k] = orbv[k].conj().T.dot(v1[k].dot(orbo[k])) * 2
-                x2[k] += cp.einsum('ps,sq->pq', fvv[k], x1[k]) * 2
-                x2[k] -= cp.einsum('ps,rp->rs', foo[k], x1[k]) * 2
+                x2[k] += einsum('ps,sq->pq', fvv[k], x1[k]) * 2
+                x2[k] -= einsum('ps,rp->rs', foo[k], x1[k]) * 2
             return cp.hstack([x.ravel() for x in x2])
     return g, h_op, h_diag
 
@@ -160,10 +160,10 @@ def gen_g_hop_uhf(mf, mo_coeff, mo_occ, fock_ao, h1e=None):
             for k in range(nkpts):
                 x2a[k]  = orbva[k].conj().T.dot(v1[0][k].dot(orboa[k]))
                 x2b[k]  = orbvb[k].conj().T.dot(v1[1][k].dot(orbob[k]))
-                x2a[k] += cp.einsum('ps,sq->pq', fvva[k], x1a[k])
-                x2a[k] -= cp.einsum('ps,rp->rs', fooa[k], x1a[k])
-                x2b[k] += cp.einsum('ps,sq->pq', fvvb[k], x1b[k])
-                x2b[k] -= cp.einsum('ps,rp->rs', foob[k], x1b[k])
+                x2a[k] += einsum('ps,sq->pq', fvva[k], x1a[k])
+                x2a[k] -= einsum('ps,rp->rs', fooa[k], x1a[k])
+                x2b[k] += einsum('ps,sq->pq', fvvb[k], x1b[k])
+                x2b[k] -= einsum('ps,rp->rs', foob[k], x1b[k])
             x2 = cp.hstack([x.ravel() for x in (x2a+x2b)])
         return x2
     return g, h_op, h_diag

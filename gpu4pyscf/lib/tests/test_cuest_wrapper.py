@@ -1206,7 +1206,7 @@ class KnownValues(unittest.TestCase):
         assert test_j3c.shape == (naux, nao, nao)
 
         test_J = einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
-        test_K = cp.einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
+        test_K = einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
 
         assert cp.max(cp.abs(test_J - ref_J)) < 1e-10
         assert cp.max(cp.abs(test_K - ref_K)) < 1e-10
@@ -1216,13 +1216,13 @@ class KnownValues(unittest.TestCase):
         mo_k = cp.random.rand(nao, 7) * 2 - 1
         mo_l = cp.random.rand(nao, 11) * 2 - 1
 
-        ref_j3c_mo_ij = cp.einsum("puv,ui,vj->pij", ref_j3c, mo_i, mo_j)
-        ref_j3c_mo_kl = cp.einsum("puv,uk,vl->pkl", ref_j3c, mo_k, mo_l)
-        ref_j4c_mo = cp.einsum("pij,pkl->ijkl", ref_j3c_mo_ij, ref_j3c_mo_kl)
+        ref_j3c_mo_ij = einsum("puv,ui,vj->pij", ref_j3c, mo_i, mo_j)
+        ref_j3c_mo_kl = einsum("puv,uk,vl->pkl", ref_j3c, mo_k, mo_l)
+        ref_j4c_mo = einsum("pij,pkl->ijkl", ref_j3c_mo_ij, ref_j3c_mo_kl)
 
         test_j3c_mo_ij = mf.df_mo_integral(mo_i, mo_j)
         test_j3c_mo_kl = mf.df_mo_integral(mo_k, mo_l)
-        test_j4c_mo = cp.einsum("pij,pkl->ijkl", test_j3c_mo_ij, test_j3c_mo_kl)
+        test_j4c_mo = einsum("pij,pkl->ijkl", test_j3c_mo_ij, test_j3c_mo_kl)
 
         assert cp.max(cp.abs(test_j4c_mo - ref_j4c_mo)) < 1e-9
 
@@ -1250,7 +1250,7 @@ class KnownValues(unittest.TestCase):
         assert test_j3c.shape[0] < naux # Cuest uses spherical auxbasis, pyscf uses cartesian auxbasis
 
         test_J = einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
-        test_K = cp.einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
+        test_K = einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
 
         assert cp.max(cp.abs(test_J - ref_J)) < 1e-1 # The different auxasis leads to very different J and K
         assert cp.max(cp.abs(test_K - ref_K)) < 1e-1
@@ -1291,7 +1291,7 @@ class KnownValues(unittest.TestCase):
         j2c_fr_lambda = j2c_fr_lambda[j2c_fr_lambda >= 1e-12]
         j2c_fr_inv = j2c_fr_X @ cp.diag(1 / j2c_fr_lambda) @ j2c_fr_X.T
 
-        ref_j3c = cp.einsum("pq,qij->pij", j2c_mr_half @ j2c_fr_inv, j3c_fr)
+        ref_j3c = einsum("pq,qij->pij", j2c_mr_half @ j2c_fr_inv, j3c_fr)
 
         mf = RHF(mol).density_fit(auxbasis = auxbasis)
         mf = apply_cuest_wrapper(mf)
@@ -1303,10 +1303,10 @@ class KnownValues(unittest.TestCase):
         assert test_j3c.shape == (naux, nao, nao)
 
         ref_J = einsum("pij,pkl,kl->ij", ref_j3c, ref_j3c, dm)
-        ref_K = cp.einsum("pij,pkl,jl->ik", ref_j3c, ref_j3c, dm)
+        ref_K = einsum("pij,pkl,jl->ik", ref_j3c, ref_j3c, dm)
 
         test_J = einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
-        test_K = cp.einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
+        test_K = einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
 
         assert cp.max(cp.abs(test_J - ref_J)) < 2e-8
         assert cp.max(cp.abs(test_K - ref_K)) < 2e-8
@@ -1316,13 +1316,13 @@ class KnownValues(unittest.TestCase):
         mo_k = cp.random.rand(nao, 5) * 2 - 1
         mo_l = cp.random.rand(nao, 3) * 2 - 1
 
-        ref_j3c_mo_ij = cp.einsum("puv,ui,vj->pij", ref_j3c, mo_i, mo_j)
-        ref_j3c_mo_kl = cp.einsum("puv,uk,vl->pkl", ref_j3c, mo_k, mo_l)
-        ref_j4c_mo = cp.einsum("pij,pkl->ijkl", ref_j3c_mo_ij, ref_j3c_mo_kl)
+        ref_j3c_mo_ij = einsum("puv,ui,vj->pij", ref_j3c, mo_i, mo_j)
+        ref_j3c_mo_kl = einsum("puv,uk,vl->pkl", ref_j3c, mo_k, mo_l)
+        ref_j4c_mo = einsum("pij,pkl->ijkl", ref_j3c_mo_ij, ref_j3c_mo_kl)
 
         test_j3c_mo_ij = mf.df_mo_integral(mo_i, mo_j, omega = omega, lr_factor = lr_factor, sr_factor = sr_factor)
         test_j3c_mo_kl = mf.df_mo_integral(mo_k, mo_l, omega = omega, lr_factor = lr_factor, sr_factor = sr_factor)
-        test_j4c_mo = cp.einsum("pij,pkl->ijkl", test_j3c_mo_ij, test_j3c_mo_kl)
+        test_j4c_mo = einsum("pij,pkl->ijkl", test_j3c_mo_ij, test_j3c_mo_kl)
 
         assert cp.max(cp.abs(test_j4c_mo - ref_j4c_mo)) < 1e-7
 
@@ -1363,7 +1363,7 @@ class KnownValues(unittest.TestCase):
         j2c_fr_lambda = j2c_fr_lambda[j2c_fr_lambda >= 1e-12]
         j2c_fr_inv = j2c_fr_X @ cp.diag(1 / j2c_fr_lambda) @ j2c_fr_X.T
 
-        ref_j3c = cp.einsum("pq,qij->pij", j2c_mr_half @ j2c_fr_inv, j3c_fr)
+        ref_j3c = einsum("pq,qij->pij", j2c_mr_half @ j2c_fr_inv, j3c_fr)
 
         mf = RHF(mol).density_fit(auxbasis = auxbasis)
         mf = apply_cuest_wrapper(mf)
@@ -1375,10 +1375,10 @@ class KnownValues(unittest.TestCase):
         assert test_j3c.shape == (naux, nao, nao)
 
         ref_J = einsum("pij,pkl,kl->ij", ref_j3c, ref_j3c, dm)
-        ref_K = cp.einsum("pij,pkl,jl->ik", ref_j3c, ref_j3c, dm)
+        ref_K = einsum("pij,pkl,jl->ik", ref_j3c, ref_j3c, dm)
 
         test_J = einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
-        test_K = cp.einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
+        test_K = einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
 
         assert cp.max(cp.abs(test_J - ref_J)) < 3e-8
         assert cp.max(cp.abs(test_K - ref_K)) < 3e-8
@@ -1388,13 +1388,13 @@ class KnownValues(unittest.TestCase):
         mo_k = cp.random.rand(nao, 5) * 2 - 1
         mo_l = cp.random.rand(nao, 3) * 2 - 1
 
-        ref_j3c_mo_ij = cp.einsum("puv,ui,vj->pij", ref_j3c, mo_i, mo_j)
-        ref_j3c_mo_kl = cp.einsum("puv,uk,vl->pkl", ref_j3c, mo_k, mo_l)
-        ref_j4c_mo = cp.einsum("pij,pkl->ijkl", ref_j3c_mo_ij, ref_j3c_mo_kl)
+        ref_j3c_mo_ij = einsum("puv,ui,vj->pij", ref_j3c, mo_i, mo_j)
+        ref_j3c_mo_kl = einsum("puv,uk,vl->pkl", ref_j3c, mo_k, mo_l)
+        ref_j4c_mo = einsum("pij,pkl->ijkl", ref_j3c_mo_ij, ref_j3c_mo_kl)
 
         test_j3c_mo_ij = mf.df_mo_integral(mo_i, mo_j, omega = omega, lr_factor = lr_factor, sr_factor = sr_factor)
         test_j3c_mo_kl = mf.df_mo_integral(mo_k, mo_l, omega = omega, lr_factor = lr_factor, sr_factor = sr_factor)
-        test_j4c_mo = cp.einsum("pij,pkl->ijkl", test_j3c_mo_ij, test_j3c_mo_kl)
+        test_j4c_mo = einsum("pij,pkl->ijkl", test_j3c_mo_ij, test_j3c_mo_kl)
 
         assert cp.max(cp.abs(test_j4c_mo - ref_j4c_mo)) < 3e-7
 
@@ -1435,7 +1435,7 @@ class KnownValues(unittest.TestCase):
         j2c_fr_lambda = j2c_fr_lambda[j2c_fr_lambda >= 1e-12]
         j2c_fr_inv = j2c_fr_X @ cp.diag(1 / j2c_fr_lambda) @ j2c_fr_X.T
 
-        ref_j3c = cp.einsum("pq,qij->pij", j2c_mr_half @ j2c_fr_inv, j3c_fr)
+        ref_j3c = einsum("pq,qij->pij", j2c_mr_half @ j2c_fr_inv, j3c_fr)
 
         mf = RHF(mol).density_fit(auxbasis = auxbasis)
         mf = apply_cuest_wrapper(mf)
@@ -1447,10 +1447,10 @@ class KnownValues(unittest.TestCase):
         assert test_j3c.shape == (naux, nao, nao)
 
         ref_J = einsum("pij,pkl,kl->ij", ref_j3c, ref_j3c, dm)
-        ref_K = cp.einsum("pij,pkl,jl->ik", ref_j3c, ref_j3c, dm)
+        ref_K = einsum("pij,pkl,jl->ik", ref_j3c, ref_j3c, dm)
 
         test_J = einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
-        test_K = cp.einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
+        test_K = einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
 
         assert cp.max(cp.abs(test_J - ref_J)) < 2e-8
         assert cp.max(cp.abs(test_K - ref_K)) < 2e-8
@@ -1460,13 +1460,13 @@ class KnownValues(unittest.TestCase):
         mo_k = cp.random.rand(nao, 5) * 2 - 1
         mo_l = cp.random.rand(nao, 3) * 2 - 1
 
-        ref_j3c_mo_ij = cp.einsum("puv,ui,vj->pij", ref_j3c, mo_i, mo_j)
-        ref_j3c_mo_kl = cp.einsum("puv,uk,vl->pkl", ref_j3c, mo_k, mo_l)
-        ref_j4c_mo = cp.einsum("pij,pkl->ijkl", ref_j3c_mo_ij, ref_j3c_mo_kl)
+        ref_j3c_mo_ij = einsum("puv,ui,vj->pij", ref_j3c, mo_i, mo_j)
+        ref_j3c_mo_kl = einsum("puv,uk,vl->pkl", ref_j3c, mo_k, mo_l)
+        ref_j4c_mo = einsum("pij,pkl->ijkl", ref_j3c_mo_ij, ref_j3c_mo_kl)
 
         test_j3c_mo_ij = mf.df_mo_integral(mo_i, mo_j, omega = omega, lr_factor = lr_factor, sr_factor = sr_factor)
         test_j3c_mo_kl = mf.df_mo_integral(mo_k, mo_l, omega = omega, lr_factor = lr_factor, sr_factor = sr_factor)
-        test_j4c_mo = cp.einsum("pij,pkl->ijkl", test_j3c_mo_ij, test_j3c_mo_kl)
+        test_j4c_mo = einsum("pij,pkl->ijkl", test_j3c_mo_ij, test_j3c_mo_kl)
 
         assert cp.max(cp.abs(test_j4c_mo - ref_j4c_mo)) < 1e-7
 
@@ -1507,7 +1507,7 @@ class KnownValues(unittest.TestCase):
         j2c_fr_lambda = j2c_fr_lambda[j2c_fr_lambda >= 1e-12]
         j2c_fr_inv = j2c_fr_X @ cp.diag(1 / j2c_fr_lambda) @ j2c_fr_X.T
 
-        ref_j3c = cp.einsum("pq,qij->pij", j2c_mr_half @ j2c_fr_inv, j3c_fr)
+        ref_j3c = einsum("pq,qij->pij", j2c_mr_half @ j2c_fr_inv, j3c_fr)
 
         mf = RHF(mol).density_fit(auxbasis = auxbasis)
         mf = apply_cuest_wrapper(mf)
@@ -1519,10 +1519,10 @@ class KnownValues(unittest.TestCase):
         assert test_j3c.shape == (naux, nao, nao)
 
         ref_J = einsum("pij,pkl,kl->ij", ref_j3c, ref_j3c, dm)
-        ref_K = cp.einsum("pij,pkl,jl->ik", ref_j3c, ref_j3c, dm)
+        ref_K = einsum("pij,pkl,jl->ik", ref_j3c, ref_j3c, dm)
 
         test_J = einsum("pij,pkl,kl->ij", test_j3c, test_j3c, dm)
-        test_K = cp.einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
+        test_K = einsum("pij,pkl,jl->ik", test_j3c, test_j3c, dm)
 
         assert cp.max(cp.abs(test_J - ref_J)) < 2e-8
         assert cp.max(cp.abs(test_K - ref_K)) < 2e-8
@@ -1532,13 +1532,13 @@ class KnownValues(unittest.TestCase):
         mo_k = cp.random.rand(nao, 5) * 2 - 1
         mo_l = cp.random.rand(nao, 3) * 2 - 1
 
-        ref_j3c_mo_ij = cp.einsum("puv,ui,vj->pij", ref_j3c, mo_i, mo_j)
-        ref_j3c_mo_kl = cp.einsum("puv,uk,vl->pkl", ref_j3c, mo_k, mo_l)
-        ref_j4c_mo = cp.einsum("pij,pkl->ijkl", ref_j3c_mo_ij, ref_j3c_mo_kl)
+        ref_j3c_mo_ij = einsum("puv,ui,vj->pij", ref_j3c, mo_i, mo_j)
+        ref_j3c_mo_kl = einsum("puv,uk,vl->pkl", ref_j3c, mo_k, mo_l)
+        ref_j4c_mo = einsum("pij,pkl->ijkl", ref_j3c_mo_ij, ref_j3c_mo_kl)
 
         test_j3c_mo_ij = mf.df_mo_integral(mo_i, mo_j, omega = omega, lr_factor = lr_factor, sr_factor = sr_factor)
         test_j3c_mo_kl = mf.df_mo_integral(mo_k, mo_l, omega = omega, lr_factor = lr_factor, sr_factor = sr_factor)
-        test_j4c_mo = cp.einsum("pij,pkl->ijkl", test_j3c_mo_ij, test_j3c_mo_kl)
+        test_j4c_mo = einsum("pij,pkl->ijkl", test_j3c_mo_ij, test_j3c_mo_kl)
 
         assert cp.max(cp.abs(test_j4c_mo - ref_j4c_mo)) < 1e-7
 

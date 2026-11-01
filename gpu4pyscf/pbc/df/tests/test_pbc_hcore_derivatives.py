@@ -14,7 +14,6 @@
 
 import unittest
 import numpy as np
-import cupy as cp
 
 import pyscf
 from gpu4pyscf.pbc.dft.rks import RKS

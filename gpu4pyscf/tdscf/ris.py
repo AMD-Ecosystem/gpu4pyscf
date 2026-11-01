@@ -18,7 +18,7 @@ import cupyx.scipy.linalg as cpx_linalg
 
 from pyscf import gto, lib
 from gpu4pyscf import scf
-from gpu4pyscf.lib.cupy_helper import contract, get_avail_mem, fill_symmetric
+from gpu4pyscf.lib.cupy_helper import contract, get_avail_mem, fill_symmetric, einsum
 from gpu4pyscf.tdscf import parameter, math_helper, spectralib, _lr_eig, _krylov_tools
 from gpu4pyscf.tdscf import rhf as td_rhf
 from pyscf.data.nist import HARTREE2EV
@@ -1162,14 +1162,14 @@ class TDA(RisBase):
         nvir = orbv1.shape[1]
 
         X_mo = xy[0].reshape(nstates, nocc, nvir)
-        X_mo = cp.einsum('ui,nij,vj->nuv', S_occ, X_mo, S_vir)
+        X_mo = einsum('ui,nij,vj->nuv', S_occ, X_mo, S_vir)
         X_mo = X_mo.reshape(nstates, -1)
         Y_mo = xy[1]
         if not isinstance(Y_mo, (np.ndarray, cp.ndarray)):
             return X_mo
 
         Y_mo = xy[1].reshape(nstates, nocc, nvir)
-        Y_mo = cp.einsum('ui,nij,vj->nuv', S_occ, Y_mo, S_vir)
+        Y_mo = einsum('ui,nij,vj->nuv', S_occ, Y_mo, S_vir)
         Y_mo = Y_mo.reshape(nstates, -1)
         return X_mo, Y_mo
 

@@ -14,7 +14,6 @@
 
 import unittest
 import numpy as np
-import cupy as cp
 from pyscf import lib
 from pyscf.pbc import gto as pbcgto
 from gpu4pyscf.pbc import scf as pscf

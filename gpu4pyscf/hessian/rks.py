@@ -905,7 +905,7 @@ def _get_enlc_deriv2(hessobj, mo_coeff, mo_occ, max_memory, log = None):
             split_fw_gamma = fw_gamma_i[g0_nonzero : g1_nonzero]
 
             # d2gamma/dAdB = 2 * d_nabla_rho/dA * d_nabla_rho/dB + 2 * nabla_rho * d2_nabla_rho/dAdB
-            d2e += 2 * cupy.einsum("Adxg,BDxg,g->ABdD", drho_dA_orbital_response[:, :, 1:4, :], drho_dA_orbital_response[:, :, 1:4, :], split_fw_gamma)
+            d2e += 2 * einsum("Adxg,BDxg,g->ABdD", drho_dA_orbital_response[:, :, 1:4, :], drho_dA_orbital_response[:, :, 1:4, :], split_fw_gamma)
             del drho_dA_orbital_response
 
             d2e += contract_d2rho_dAdB_sparse(dm0_masked, "GGA", natm, masked_i_atom_of_aos, None,
@@ -1045,7 +1045,7 @@ def _get_enlc_deriv2(hessobj, mo_coeff, mo_occ, max_memory, log = None):
             # First two terms in E_{G,G}^{AB} in Eq 37, first piece:
             # d2gamma/dAdB = 2 * d_nabla_rho/dA * d_nabla_rho/dB + 2 * nabla_rho * d2_nabla_rho/dAdB
             split_fw_gamma = fw_gamma_i[g0_nonzero : g1_nonzero]
-            d2e += 2 * cupy.einsum("Adxg,BDxg,g->ABdD", drho_dA_full[:, :, 1:4, :], drho_dA_full[:, :, 1:4, :], split_fw_gamma)
+            d2e += 2 * einsum("Adxg,BDxg,g->ABdD", drho_dA_full[:, :, 1:4, :], drho_dA_full[:, :, 1:4, :], split_fw_gamma)
             del split_fw_gamma, drho_dA_full
 
             del split_drho_dr
@@ -1866,9 +1866,9 @@ def _get_vxc_deriv1_grid_response(hessobj, mo_coeff, mo_occ, max_memory):
             dFock_ao_of_atom_i = dFock_orbital_response_dmudA_nu_term[:, ao_of_atom_i, :]
 
             dFock_ao_of_atom_i_mocc = dFock_ao_of_atom_i @ mocc_sorted
-            dFock_mo_occ[i_atom, :, :, :] -= cupy.einsum("pi,dpj->dij", mo_coeff_sorted[ao_of_atom_i], dFock_ao_of_atom_i_mocc)
+            dFock_mo_occ[i_atom, :, :, :] -= einsum("pi,dpj->dij", mo_coeff_sorted[ao_of_atom_i], dFock_ao_of_atom_i_mocc)
             dFock_ao_of_atom_i_mocc = dFock_ao_of_atom_i.transpose(0,2,1) @ mocc_sorted[ao_of_atom_i]
-            dFock_mo_occ[i_atom, :, :, :] -= cupy.einsum("pi,dpj->dij", mo_coeff_sorted, dFock_ao_of_atom_i_mocc)
+            dFock_mo_occ[i_atom, :, :, :] -= einsum("pi,dpj->dij", mo_coeff_sorted, dFock_ao_of_atom_i_mocc)
             del dFock_ao_of_atom_i_mocc, dFock_ao_of_atom_i
     del dFock_orbital_response_dmudA_nu_term
 
@@ -2429,11 +2429,11 @@ def _get_vnlc_deriv1(hessobj, mo_coeff, mo_occ, max_memory):
         del dmudA_nu_ao
 
         if mo_coeff.ndim == 3:
-            dFock_mo_occa += cupy.einsum("pi,Adpj->Adij", mo_coeff[0, idx, :], dFock_sparse_ao_occa)
-            dFock_mo_occb += cupy.einsum("pi,Adpj->Adij", mo_coeff[1, idx, :], dFock_sparse_ao_occb)
+            dFock_mo_occa += einsum("pi,Adpj->Adij", mo_coeff[0, idx, :], dFock_sparse_ao_occa)
+            dFock_mo_occb += einsum("pi,Adpj->Adij", mo_coeff[1, idx, :], dFock_sparse_ao_occb)
             del dFock_sparse_ao_occa, dFock_sparse_ao_occb
         else:
-            dFock_mo_occ += cupy.einsum("pi,Adpj->Adij", mo_coeff[idx, :], dFock_sparse_ao_occ)
+            dFock_mo_occ += einsum("pi,Adpj->Adij", mo_coeff[idx, :], dFock_sparse_ao_occ)
             del dFock_sparse_ao_occ
 
         g0_nonzero = g1_nonzero
@@ -2448,18 +2448,18 @@ def _get_vnlc_deriv1(hessobj, mo_coeff, mo_occ, max_memory):
 
             if mo_coeff.ndim == 3:
                 dFock_ao_of_atom_i_mocc = dFock_ao_of_atom_i @ mocca
-                dFock_mo_occa[i_atom, :, :, :] -= cupy.einsum("pi,dpj->dij", mo_coeff[0, ao_of_atom_i, :], dFock_ao_of_atom_i_mocc)
+                dFock_mo_occa[i_atom, :, :, :] -= einsum("pi,dpj->dij", mo_coeff[0, ao_of_atom_i, :], dFock_ao_of_atom_i_mocc)
                 dFock_ao_of_atom_i_mocc = dFock_ao_of_atom_i @ moccb
-                dFock_mo_occb[i_atom, :, :, :] -= cupy.einsum("pi,dpj->dij", mo_coeff[1, ao_of_atom_i, :], dFock_ao_of_atom_i_mocc)
+                dFock_mo_occb[i_atom, :, :, :] -= einsum("pi,dpj->dij", mo_coeff[1, ao_of_atom_i, :], dFock_ao_of_atom_i_mocc)
                 dFock_ao_of_atom_i_mocc = dFock_ao_of_atom_i.transpose(0,2,1) @ mocca[ao_of_atom_i]
-                dFock_mo_occa[i_atom, :, :, :] -= cupy.einsum("pi,dpj->dij", mo_coeff[0], dFock_ao_of_atom_i_mocc)
+                dFock_mo_occa[i_atom, :, :, :] -= einsum("pi,dpj->dij", mo_coeff[0], dFock_ao_of_atom_i_mocc)
                 dFock_ao_of_atom_i_mocc = dFock_ao_of_atom_i.transpose(0,2,1) @ moccb[ao_of_atom_i]
-                dFock_mo_occb[i_atom, :, :, :] -= cupy.einsum("pi,dpj->dij", mo_coeff[1], dFock_ao_of_atom_i_mocc)
+                dFock_mo_occb[i_atom, :, :, :] -= einsum("pi,dpj->dij", mo_coeff[1], dFock_ao_of_atom_i_mocc)
             else:
                 dFock_ao_of_atom_i_mocc = dFock_ao_of_atom_i @ mocc
-                dFock_mo_occ[i_atom, :, :, :] -= cupy.einsum("pi,dpj->dij", mo_coeff[ao_of_atom_i], dFock_ao_of_atom_i_mocc)
+                dFock_mo_occ[i_atom, :, :, :] -= einsum("pi,dpj->dij", mo_coeff[ao_of_atom_i], dFock_ao_of_atom_i_mocc)
                 dFock_ao_of_atom_i_mocc = dFock_ao_of_atom_i.transpose(0,2,1) @ mocc[ao_of_atom_i]
-                dFock_mo_occ[i_atom, :, :, :] -= cupy.einsum("pi,dpj->dij", mo_coeff, dFock_ao_of_atom_i_mocc)
+                dFock_mo_occ[i_atom, :, :, :] -= einsum("pi,dpj->dij", mo_coeff, dFock_ao_of_atom_i_mocc)
             del dFock_ao_of_atom_i_mocc, dFock_ao_of_atom_i
     del dFock_orbital_response_dmudA_nu_term
 
@@ -2622,11 +2622,11 @@ def _get_vnlc_deriv1(hessobj, mo_coeff, mo_occ, max_memory):
                 del mu_mocc, dmudr_mocc, dmudr_drhodr, dmudr_drhodr_mocc
 
             if mo_coeff.ndim == 3:
-                dFock_mo_occa += cupy.einsum("pi,Adpj->Adij", mo_coeff[0, idx, :], dFock_sparse_ao_occa)
-                dFock_mo_occb += cupy.einsum("pi,Adpj->Adij", mo_coeff[1, idx, :], dFock_sparse_ao_occb)
+                dFock_mo_occa += einsum("pi,Adpj->Adij", mo_coeff[0, idx, :], dFock_sparse_ao_occa)
+                dFock_mo_occb += einsum("pi,Adpj->Adij", mo_coeff[1, idx, :], dFock_sparse_ao_occb)
                 del dFock_sparse_ao_occa, dFock_sparse_ao_occb
             else:
-                dFock_mo_occ += cupy.einsum("pi,Adpj->Adij", mo_coeff[idx, :], dFock_sparse_ao_occ)
+                dFock_mo_occ += einsum("pi,Adpj->Adij", mo_coeff[idx, :], dFock_sparse_ao_occ)
                 del dFock_sparse_ao_occ
 
             g0_nonzero = g1_nonzero
@@ -2874,7 +2874,7 @@ def get_d2rho_dAdB_full(dm0, xctype, natm, ngrids, aoslices = None, atom_to_grid
             for j_atom in range(natm):
                 pj0, pj1 = aoslices[j_atom][2:]
                 # dmu/dr * dnu/dr, A orbital, B orbital
-                d2rho_dAdB_orbital_response[i_atom, j_atom, :, :, :] += cupy.einsum('dig,Djg,ij->dDg',
+                d2rho_dAdB_orbital_response[i_atom, j_atom, :, :, :] += einsum('dig,Djg,ij->dDg',
                     dmu_dr[:, pi0:pi1, :], dmu_dr[:, pj0:pj1, :], dm0[pi0:pi1, pj0:pj1] + dm0[pj0:pj1, pi0:pi1].T)
 
     if with_grid_response:
@@ -2886,7 +2886,7 @@ def get_d2rho_dAdB_full(dm0, xctype, natm, ngrids, aoslices = None, atom_to_grid
                 d2rho_dAdB_grid_response[i_atom, i_atom][:, :, g_i_with_response] += einsum('dDig,jg,ij->dDg',
                     d2mu_dr2[:, :, :, g_i_with_response], mu[:, g_i_with_response], dm0 + dm0.T)
                 # dmu/dr * dnu/dr, A grid, B grid
-                d2rho_dAdB_grid_response[i_atom, i_atom][:, :, g_i_with_response] += cupy.einsum('dig,Djg,ij->dDg',
+                d2rho_dAdB_grid_response[i_atom, i_atom][:, :, g_i_with_response] += einsum('dig,Djg,ij->dDg',
                     dmu_dr[:, :, g_i_with_response], dmu_dr[:, :, g_i_with_response], dm0 + dm0.T)
 
             for j_atom in range(natm):
@@ -2900,9 +2900,9 @@ def get_d2rho_dAdB_full(dm0, xctype, natm, ngrids, aoslices = None, atom_to_grid
                         d2mu_dr2[:, :, pj0:pj1, g_i_with_response], mu[:, g_i_with_response], dm0[pj0:pj1, :] + dm0[:, pj0:pj1].T)
 
                     # dmu/dr * dnu/dr, A orbital, B grid
-                    d2rho_dAdB_grid_response[i_atom, j_atom][:, :, g_i_with_response] -= cupy.einsum('dig,Djg,ij->dDg',
+                    d2rho_dAdB_grid_response[i_atom, j_atom][:, :, g_i_with_response] -= einsum('dig,Djg,ij->dDg',
                         dmu_dr[:, pj0:pj1, g_i_with_response], dmu_dr[:, :, g_i_with_response], dm0[pj0:pj1, :] + dm0[:, pj0:pj1].T).transpose(1,0,2)
-                    d2rho_dAdB_grid_response[j_atom, i_atom][:, :, g_i_with_response] -= cupy.einsum('dig,Djg,ij->dDg',
+                    d2rho_dAdB_grid_response[j_atom, i_atom][:, :, g_i_with_response] -= einsum('dig,Djg,ij->dDg',
                         dmu_dr[:, pj0:pj1, g_i_with_response], dmu_dr[:, :, g_i_with_response], dm0[pj0:pj1, :] + dm0[:, pj0:pj1].T)
 
     d2nablarho_dAdB_orbital_response = None
@@ -2916,15 +2916,15 @@ def get_d2rho_dAdB_full(dm0, xctype, natm, ngrids, aoslices = None, atom_to_grid
             d2nablarho_dAdB_orbital_response[i_atom, i_atom, :, :, :, :] += einsum('dDxig,jg,ij->dDxg',
                 d3mu_dr3[:, :, :, pi0:pi1, :], mu, dm0[pi0:pi1, :] + dm0[:, pi0:pi1].T)
             # d2mu/(dA dB) * dnu/dr, A orbital, B orbital
-            d2nablarho_dAdB_orbital_response[i_atom, i_atom, :, :, :, :] += cupy.einsum('dDig,xjg,ij->dDxg',
+            d2nablarho_dAdB_orbital_response[i_atom, i_atom, :, :, :, :] += einsum('dDig,xjg,ij->dDxg',
                 d2mu_dr2[:, :, pi0:pi1, :], dmu_dr, dm0[pi0:pi1, :] + dm0[:, pi0:pi1].T)
 
             for j_atom in range(natm):
                 pj0, pj1 = aoslices[j_atom][2:]
                 # d2mu/(dr dA) * dnu/dB, A orbital, B orbital
-                d2nablarho_dAdB_orbital_response[i_atom, j_atom, :, :, :, :] += cupy.einsum('dxig,Djg,ij->dDxg',
+                d2nablarho_dAdB_orbital_response[i_atom, j_atom, :, :, :, :] += einsum('dxig,Djg,ij->dDxg',
                     d2mu_dr2[:, :, pi0:pi1, :], dmu_dr[:, pj0:pj1, :], dm0[pi0:pi1, pj0:pj1] + dm0[pj0:pj1, pi0:pi1].T)
-                d2nablarho_dAdB_orbital_response[j_atom, i_atom, :, :, :, :] += cupy.einsum('dxig,Djg,ij->dDxg',
+                d2nablarho_dAdB_orbital_response[j_atom, i_atom, :, :, :, :] += einsum('dxig,Djg,ij->dDxg',
                     d2mu_dr2[:, :, pi0:pi1, :], dmu_dr[:, pj0:pj1, :], dm0[pi0:pi1, pj0:pj1] + dm0[pj0:pj1, pi0:pi1].T).transpose(1,0,2,3)
 
     if with_grid_response and with_nablarho:
@@ -2936,13 +2936,13 @@ def get_d2rho_dAdB_full(dm0, xctype, natm, ngrids, aoslices = None, atom_to_grid
                 d2nablarho_dAdB_grid_response[i_atom, i_atom][:, :, :, g_i_with_response] += einsum('dDxig,jg,ij->dDxg',
                     d3mu_dr3[:, :, :, :, g_i_with_response], mu[:, g_i_with_response], dm0 + dm0.T)
                 # d2mu/(dA dB) * dnu/dr, A grid, B grid
-                d2nablarho_dAdB_grid_response[i_atom, i_atom][:, :, :, g_i_with_response] += cupy.einsum('dDig,xjg,ij->dDxg',
+                d2nablarho_dAdB_grid_response[i_atom, i_atom][:, :, :, g_i_with_response] += einsum('dDig,xjg,ij->dDxg',
                     d2mu_dr2[:, :, :, g_i_with_response], dmu_dr[:, :, g_i_with_response], dm0 + dm0.T)
 
                 # d2mu/(dr dA) * dnu/dB, A grid, B grid
-                d2nablarho_dAdB_grid_response[i_atom, i_atom][:, :, :, g_i_with_response] += cupy.einsum('dxig,Djg,ij->dDxg',
+                d2nablarho_dAdB_grid_response[i_atom, i_atom][:, :, :, g_i_with_response] += einsum('dxig,Djg,ij->dDxg',
                     d2mu_dr2[:, :, :, g_i_with_response], dmu_dr[:, :, g_i_with_response], dm0 + dm0.T)
-                d2nablarho_dAdB_grid_response[i_atom, i_atom][:, :, :, g_i_with_response] += cupy.einsum('dxig,Djg,ij->dDxg',
+                d2nablarho_dAdB_grid_response[i_atom, i_atom][:, :, :, g_i_with_response] += einsum('dxig,Djg,ij->dDxg',
                     d2mu_dr2[:, :, :, g_i_with_response], dmu_dr[:, :, g_i_with_response], dm0 + dm0.T).transpose(1,0,2,3)
 
             for j_atom in range(natm):
@@ -2955,19 +2955,19 @@ def get_d2rho_dAdB_full(dm0, xctype, natm, ngrids, aoslices = None, atom_to_grid
                         d3mu_dr3[:, :, :, pj0:pj1, g_i_with_response], mu[:, g_i_with_response], dm0[pj0:pj1, :] + dm0[:, pj0:pj1].T)
 
                     # d2mu/(dA dB) * dnu/dr, A orbital, B grid
-                    d2nablarho_dAdB_grid_response[i_atom, j_atom][:, :, :, g_i_with_response] -= cupy.einsum('dDig,xjg,ij->dDxg',
+                    d2nablarho_dAdB_grid_response[i_atom, j_atom][:, :, :, g_i_with_response] -= einsum('dDig,xjg,ij->dDxg',
                         d2mu_dr2[:, :, pj0:pj1, g_i_with_response], dmu_dr[:, :, g_i_with_response], dm0[pj0:pj1, :] + dm0[:, pj0:pj1].T).transpose(1,0,2,3)
-                    d2nablarho_dAdB_grid_response[j_atom, i_atom][:, :, :, g_i_with_response] -= cupy.einsum('dDig,xjg,ij->dDxg',
+                    d2nablarho_dAdB_grid_response[j_atom, i_atom][:, :, :, g_i_with_response] -= einsum('dDig,xjg,ij->dDxg',
                         d2mu_dr2[:, :, pj0:pj1, g_i_with_response], dmu_dr[:, :, g_i_with_response], dm0[pj0:pj1, :] + dm0[:, pj0:pj1].T)
 
                     # d2mu/(dr dA) * dnu/dB, A orbital, B grid
-                    d2nablarho_dAdB_grid_response[i_atom, j_atom][:, :, :, g_i_with_response] -= cupy.einsum('dxig,Djg,ij->dDxg',
+                    d2nablarho_dAdB_grid_response[i_atom, j_atom][:, :, :, g_i_with_response] -= einsum('dxig,Djg,ij->dDxg',
                         d2mu_dr2[:, :, pj0:pj1, g_i_with_response], dmu_dr[:, :, g_i_with_response], dm0[pj0:pj1, :] + dm0[:, pj0:pj1].T).transpose(1,0,2,3)
-                    d2nablarho_dAdB_grid_response[j_atom, i_atom][:, :, :, g_i_with_response] -= cupy.einsum('dxig,Djg,ij->dDxg',
+                    d2nablarho_dAdB_grid_response[j_atom, i_atom][:, :, :, g_i_with_response] -= einsum('dxig,Djg,ij->dDxg',
                         d2mu_dr2[:, :, pj0:pj1, g_i_with_response], dmu_dr[:, :, g_i_with_response], dm0[pj0:pj1, :] + dm0[:, pj0:pj1].T)
-                    d2nablarho_dAdB_grid_response[i_atom, j_atom][:, :, :, g_i_with_response] -= cupy.einsum('dig,Dxjg,ij->dDxg',
+                    d2nablarho_dAdB_grid_response[i_atom, j_atom][:, :, :, g_i_with_response] -= einsum('dig,Dxjg,ij->dDxg',
                         dmu_dr[:, pj0:pj1, g_i_with_response], d2mu_dr2[:, :, :, g_i_with_response], dm0[pj0:pj1, :] + dm0[:, pj0:pj1].T).transpose(1,0,2,3)
-                    d2nablarho_dAdB_grid_response[j_atom, i_atom][:, :, :, g_i_with_response] -= cupy.einsum('dig,Dxjg,ij->dDxg',
+                    d2nablarho_dAdB_grid_response[j_atom, i_atom][:, :, :, g_i_with_response] -= einsum('dig,Dxjg,ij->dDxg',
                         dmu_dr[:, pj0:pj1, g_i_with_response], d2mu_dr2[:, :, :, g_i_with_response], dm0[pj0:pj1, :] + dm0[:, pj0:pj1].T)
 
     d2tau_dAdB_orbital_response = None
@@ -2984,7 +2984,7 @@ def get_d2rho_dAdB_full(dm0, xctype, natm, ngrids, aoslices = None, atom_to_grid
             for j_atom in range(natm):
                 pj0, pj1 = aoslices[j_atom][2:]
                 # d2mu/(dA dr) * d2nu/(dB dr), A orbital, B orbital
-                d2tau_dAdB_orbital_response[i_atom, j_atom, :, :, :] += cupy.einsum('dxig,Dxjg,ij->dDg',
+                d2tau_dAdB_orbital_response[i_atom, j_atom, :, :, :] += einsum('dxig,Dxjg,ij->dDg',
                     d2mu_dr2[:, :, pi0:pi1, :], d2mu_dr2[:, :, pj0:pj1, :], dm0[pi0:pi1, pj0:pj1] + dm0[pj0:pj1, pi0:pi1].T)
 
         d2tau_dAdB_orbital_response *= 0.5
@@ -2998,7 +2998,7 @@ def get_d2rho_dAdB_full(dm0, xctype, natm, ngrids, aoslices = None, atom_to_grid
                 d2tau_dAdB_grid_response[i_atom, i_atom][:, :, g_i_with_response] += einsum('dDxig,xjg,ij->dDg',
                     d3mu_dr3[:, :, :, :, g_i_with_response], dmu_dr[:, :, g_i_with_response], dm0 + dm0.T)
                 # d2mu/(dA dr) * d2nu/(dB dr), A grid, B grid
-                d2tau_dAdB_grid_response[i_atom, i_atom][:, :, g_i_with_response] += cupy.einsum('dxig,Dxjg,ij->dDg',
+                d2tau_dAdB_grid_response[i_atom, i_atom][:, :, g_i_with_response] += einsum('dxig,Dxjg,ij->dDg',
                     d2mu_dr2[:, :, :, g_i_with_response], d2mu_dr2[:, :, :, g_i_with_response], dm0 + dm0.T)
 
             for j_atom in range(natm):
@@ -3011,9 +3011,9 @@ def get_d2rho_dAdB_full(dm0, xctype, natm, ngrids, aoslices = None, atom_to_grid
                         d3mu_dr3[:, :, :, pj0:pj1, g_i_with_response], dmu_dr[:, :, g_i_with_response], dm0[pj0:pj1, :] + dm0[:, pj0:pj1].T)
 
                     # d2mu/(dA dr) * d2nu/(dB dr), A orbital, B grid
-                    d2tau_dAdB_grid_response[i_atom, j_atom][:, :, g_i_with_response] -= cupy.einsum('dxig,Dxjg,ij->dDg',
+                    d2tau_dAdB_grid_response[i_atom, j_atom][:, :, g_i_with_response] -= einsum('dxig,Dxjg,ij->dDg',
                         d2mu_dr2[:, :, pj0:pj1, g_i_with_response], d2mu_dr2[:, :, :, g_i_with_response], dm0[pj0:pj1, :] + dm0[:, pj0:pj1].T).transpose(1,0,2)
-                    d2tau_dAdB_grid_response[j_atom, i_atom][:, :, g_i_with_response] -= cupy.einsum('dxig,Dxjg,ij->dDg',
+                    d2tau_dAdB_grid_response[j_atom, i_atom][:, :, g_i_with_response] -= einsum('dxig,Dxjg,ij->dDg',
                         d2mu_dr2[:, :, pj0:pj1, g_i_with_response], d2mu_dr2[:, :, :, g_i_with_response], dm0[pj0:pj1, :] + dm0[:, pj0:pj1].T)
 
         d2tau_dAdB_grid_response *= 0.5

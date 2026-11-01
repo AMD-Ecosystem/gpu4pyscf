@@ -21,6 +21,7 @@ from gpu4pyscf.dft import rks, uks
 from gpu4pyscf.hessian.rks import _get_vnlc_deriv1, _get_enlc_deriv2, get_dweight_dA, get_d2weight_dAdB
 from gpu4pyscf.lib.multi_gpu import num_devices
 from gpu4pyscf.dft import gen_grid
+from gpu4pyscf.lib.cupy_helper import einsum
 
 def setUpModule():
     global mol, mol_unrestricted
@@ -218,15 +219,15 @@ def _get_vnlc_deriv1_numerical(hessobj, mo_coeff, mo_occ, max_memory):
     if mo_coeff.ndim == 3:
         mocc0 = mo_coeff[0][:, mo_occ[0]>0]
         mocc1 = mo_coeff[1][:, mo_occ[1]>0]
-        vmat0 = cp.einsum('Adij,jq->Adiq', vmat, mocc0)
-        vmat0 = cp.einsum('Adiq,ip->Adpq', vmat0, mo_coeff[0])
-        vmat1 = cp.einsum('Adij,jq->Adiq', vmat, mocc1)
-        vmat1 = cp.einsum('Adiq,ip->Adpq', vmat1, mo_coeff[1])
+        vmat0 = einsum('Adij,jq->Adiq', vmat, mocc0)
+        vmat0 = einsum('Adiq,ip->Adpq', vmat0, mo_coeff[0])
+        vmat1 = einsum('Adij,jq->Adiq', vmat, mocc1)
+        vmat1 = einsum('Adiq,ip->Adpq', vmat1, mo_coeff[1])
         return vmat0, vmat1
     else:
         mocc = mo_coeff[:,mo_occ>0]
-        vmat = cp.einsum('Adij,jq->Adiq', vmat, mocc)
-        vmat = cp.einsum('Adiq,ip->Adpq', vmat, mo_coeff)
+        vmat = einsum('Adij,jq->Adiq', vmat, mocc)
+        vmat = einsum('Adiq,ip->Adpq', vmat, mo_coeff)
         return vmat
 
 class KnownValues(unittest.TestCase):

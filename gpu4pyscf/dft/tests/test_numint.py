@@ -455,15 +455,15 @@ H   1.7   -2.0   0.4''',
         matrix = cp.array([[0.5, 0.5],
                            [0.5, -0.5]])
         v_ud = cp.random.rand(2,4,10)
-        ref = cp.einsum('ra,axg->rxg', matrix, v_ud)
+        ref = einsum('ra,axg->rxg', matrix, v_ud)
         assert abs(xc_deriv.ud2ts(v_ud) - ref).max() < 1e-14
 
         v_ud = cp.random.rand(2,4,2,4,10)
-        ref = cp.einsum('ra,tb,axbyg->rxtyg', matrix, matrix, v_ud)
+        ref = einsum('ra,tb,axbyg->rxtyg', matrix, matrix, v_ud)
         assert abs(xc_deriv.ud2ts(v_ud) - ref).max() < 1e-14
 
         v_ud = cp.random.rand(2,4,2,4,2,4,10)
-        ref = cp.einsum('ra,tb,sc,axbyczg->rxtyszg', matrix, matrix, matrix, v_ud)
+        ref = einsum('ra,tb,sc,axbyczg->rxtyszg', matrix, matrix, matrix, v_ud)
         assert abs(xc_deriv.ud2ts(v_ud) - ref).max() < 1e-14
 
     def test_eval_xc_eff_limited_memory(self):

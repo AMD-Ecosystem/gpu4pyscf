@@ -19,7 +19,7 @@ import unittest
 import pytest
 from pyscf import lib
 import gpu4pyscf
-from gpu4pyscf.lib.cupy_helper import contract
+from gpu4pyscf.lib.cupy_helper import contract, einsum
 from gpu4pyscf.df import int3c2e_bdiv as int3c2e
 from gpu4pyscf.df.grad import tdrhf as df_tdrhf_grad
 from gpu4pyscf.df.grad.tdrhf import _jk_energy_per_atom, _jk_energies_per_atom
@@ -242,7 +242,7 @@ class KnownValues(unittest.TestCase):
         nao = mol.nao
         nocc = 4
         mo_coeff = cp.asarray(np.random.rand(6, nao, nocc)) - .5
-        dm = cp.einsum('spi,sqi->spq', mo_coeff, mo_coeff)
+        dm = einsum('spi,sqi->spq', mo_coeff, mo_coeff)
         opt = int3c2e.Int3c2eOpt(mol, auxmol).build()
         j_factor = [1, -1, -1, 1, -.5, .5]
         ej = _jk_energy_per_atom(opt, dm, j_factor=j_factor)
@@ -258,7 +258,7 @@ class KnownValues(unittest.TestCase):
         nao = mol.nao
         nocc = 5
         mo_coeff = cp.random.rand(3, nao, nocc) - .5
-        dm = cp.einsum('spi,sqi->spq', mo_coeff, mo_coeff)
+        dm = einsum('spi,sqi->spq', mo_coeff, mo_coeff)
         opt = int3c2e.Int3c2eOpt(mol, auxmol).build()
         j_factor = [1, -1,  0]
         k_factor = [1, -1, -1]

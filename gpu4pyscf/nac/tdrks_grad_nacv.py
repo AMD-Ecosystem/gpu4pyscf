@@ -56,7 +56,7 @@ def contract_veff_dm_batched(mol, veff_batch, dm_batch, hermi=0):
     atm_ids = cp.arange(natm)[:, None]
     mask = (atm_ids == atm_id_for_ao[None, :]).astype(de_partial.dtype)
 
-    de = cp.einsum('ai, nix -> nax', mask, de_partial)
+    de = einsum('ai, nix -> nax', mask, de_partial)
     if hermi == 1:
         de *= 2.0
     return de
@@ -334,8 +334,8 @@ def get_nacv_multi(td_nac, x_list, y_list, E_list, singlet=True, ge_targets=None
         dmxpy_stack = transform_to_ao(xpy_stack)
         dmxmy_stack = transform_to_ao(xmy_stack)
 
-        rIJoo = -cp.einsum('nai, naj -> nij', xJ, xI) - cp.einsum('nai, naj -> nij', yI, yJ)
-        rIJvv = cp.einsum('nai, nbi -> nab', xI, xJ) + cp.einsum('nai, nbi -> nab', yJ, yI)
+        rIJoo = -einsum('nai, naj -> nij', xJ, xI) - einsum('nai, naj -> nij', yI, yJ)
+        rIJvv = einsum('nai, nbi -> nab', xI, xJ) + einsum('nai, nbi -> nab', yJ, yI)
 
         TIJoo = (rIJoo + rIJoo.transpose(0, 2, 1)) * 0.5
         TIJvv = (rIJvv + rIJvv.transpose(0, 2, 1)) * 0.5
@@ -404,7 +404,7 @@ def get_nacv_multi(td_nac, x_list, y_list, E_list, singlet=True, ge_targets=None
             return _cT_mat_c(mo_coeff, veff_batch, mo_coeff)
 
         veff0doo = vj0IJ * 2 - vk0IJ + f1ooIJ[:,0] + k1aoIJ[:, 0] * 2
-        wvo = cp.einsum('pi, npq, qj -> nij', orbv, veff0doo, orbo) * 2.0
+        wvo = einsum('pi, npq, qj -> nij', orbv, veff0doo, orbo) * 2.0
         veffI = vj1I * 2 - vk1I + f1voI[:, 0] * 2
         veffI *= 0.5
         veff0mopI = trans_veff_batch(veffI)
@@ -471,7 +471,7 @@ def get_nacv_multi(td_nac, x_list, y_list, E_list, singlet=True, ge_targets=None
             S = cp.asarray(mf.get_ovlp())
             S_Cvir = S @ orbv
             S_Cocc = S @ orbo
-            z0 = cp.einsum('ua,nuv,vi->nai', S_Cvir, td_nac._z_prev, S_Cocc)
+            z0 = einsum('ua,nuv,vi->nai', S_Cvir, td_nac._z_prev, S_Cocc)
             
             # Phase correction
             dot_list = contract('nai,nai->n', z0, rhs_all)
@@ -484,7 +484,7 @@ def get_nacv_multi(td_nac, x_list, y_list, E_list, singlet=True, ge_targets=None
     
     # Store the solved Z-vector in AO basis for the next MD step
     td_nac._z_tasks = current_tasks
-    z_ao = cp.einsum('ua,nai,vi->nuv', orbv, z1_all, orbo)
+    z_ao = einsum('ua,nai,vi->nuv', orbv, z1_all, orbo)
     td_nac._z_prev = z_ao.copy()
 
     # for i in range(z1_all.shape[0]):
@@ -529,44 +529,44 @@ def get_nacv_multi(td_nac, x_list, y_list, E_list, singlet=True, ge_targets=None
         fock_mo = cp.diag(mo_energy)
 
         im0 = cp.zeros((n_tasks_ee, nmo, nmo))
-        term_oo = cp.einsum('ui, nuv, vj -> nij', orbo, veff0doo, orbo)
+        term_oo = einsum('ui, nuv, vj -> nij', orbo, veff0doo, orbo)
         term_oo += cp.matmul(TIJoo, fock_mo[:nocc, :nocc]) * 2.0
-        term_oo += cp.einsum('nak, nai -> nik', veff0mopI[:, nocc:, :nocc], xpyJ)
-        term_oo += cp.einsum('nak, nai -> nik', veff0momI[:, nocc:, :nocc], xmyJ)
-        term_oo += cp.einsum('nak, nai -> nik', veff0mopJ[:, nocc:, :nocc], xpyI)
-        term_oo += cp.einsum('nak, nai -> nik', veff0momJ[:, nocc:, :nocc], xmyI)
+        term_oo += einsum('nak, nai -> nik', veff0mopI[:, nocc:, :nocc], xpyJ)
+        term_oo += einsum('nak, nai -> nik', veff0momI[:, nocc:, :nocc], xmyJ)
+        term_oo += einsum('nak, nai -> nik', veff0mopJ[:, nocc:, :nocc], xpyI)
+        term_oo += einsum('nak, nai -> nik', veff0momJ[:, nocc:, :nocc], xmyI)
         term_oo[:n_pairs] += rIJoo[:n_pairs].transpose(0, 2, 1) * dE[:n_pairs, None, None]
         im0[:, :nocc, :nocc] = term_oo
 
-        term_ov = cp.einsum('ui, nuv, va -> nia', orbo, veff0doo, orbv)
+        term_ov = einsum('ui, nuv, va -> nia', orbo, veff0doo, orbv)
         term_ov += cp.matmul(TIJoo, fock_mo[:nocc, nocc:]) * 2.0
-        term_ov += cp.einsum('nab, nai -> nib', veff0mopI[:, nocc:, nocc:], xpyJ)
-        term_ov += cp.einsum('nab, nai -> nib', veff0momI[:, nocc:, nocc:], xmyJ)
-        term_ov += cp.einsum('nab, nai -> nib', veff0mopJ[:, nocc:, nocc:], xpyI)
-        term_ov += cp.einsum('nab, nai -> nib', veff0momJ[:, nocc:, nocc:], xmyI)
+        term_ov += einsum('nab, nai -> nib', veff0mopI[:, nocc:, nocc:], xpyJ)
+        term_ov += einsum('nab, nai -> nib', veff0momI[:, nocc:, nocc:], xmyJ)
+        term_ov += einsum('nab, nai -> nib', veff0mopJ[:, nocc:, nocc:], xpyI)
+        term_ov += einsum('nab, nai -> nib', veff0momJ[:, nocc:, nocc:], xmyI)
         im0[:, :nocc, nocc:] = term_ov
 
         term_vo = cp.matmul(TIJvv, fock_mo[nocc:, :nocc]) * 2.0
-        term_vo += cp.einsum('nij, nai -> naj', veff0mopI[:, :nocc, :nocc], xpyJ)
-        term_vo -= cp.einsum('nij, nai -> naj', veff0momI[:, :nocc, :nocc], xmyJ)
-        term_vo += cp.einsum('nij, nai -> naj', veff0mopJ[:, :nocc, :nocc], xpyI)
-        term_vo -= cp.einsum('nij, nai -> naj', veff0momJ[:, :nocc, :nocc], xmyI)
+        term_vo += einsum('nij, nai -> naj', veff0mopI[:, :nocc, :nocc], xpyJ)
+        term_vo -= einsum('nij, nai -> naj', veff0momI[:, :nocc, :nocc], xmyJ)
+        term_vo += einsum('nij, nai -> naj', veff0mopJ[:, :nocc, :nocc], xpyI)
+        term_vo -= einsum('nij, nai -> naj', veff0momJ[:, :nocc, :nocc], xmyI)
         im0[:, nocc:, :nocc] = term_vo
 
         term_vv = cp.matmul(TIJvv, fock_mo[nocc:, nocc:]) * 2.0
-        term_vv += cp.einsum('nib, nai -> nab', veff0mopI[:, :nocc, nocc:], xpyJ)
-        term_vv -= cp.einsum('nib, nai -> nab', veff0momI[:, :nocc, nocc:], xmyJ)
-        term_vv += cp.einsum('nib, nai -> nab', veff0mopJ[:, :nocc, nocc:], xpyI)
-        term_vv -= cp.einsum('nib, nai -> nab', veff0momJ[:, :nocc, nocc:], xmyI)
+        term_vv += einsum('nib, nai -> nab', veff0mopI[:, :nocc, nocc:], xpyJ)
+        term_vv -= einsum('nib, nai -> nab', veff0momI[:, :nocc, nocc:], xmyJ)
+        term_vv += einsum('nib, nai -> nab', veff0mopJ[:, :nocc, nocc:], xpyI)
+        term_vv -= einsum('nib, nai -> nab', veff0momJ[:, :nocc, nocc:], xmyI)
         term_vv[:n_pairs] += rIJvv[:n_pairs].transpose(0, 2, 1) * dE[:n_pairs, None, None]
         im0[:, nocc:, nocc:] = term_vv
 
         im0 *= 0.5
-        im0[:, :nocc, :nocc] += cp.einsum('ui, nuv, vj -> nij', orbo, veff_ee, orbo) * dE[:, None, None] * 0.5
-        im0[:, :nocc, nocc:] += cp.einsum('ui, nuv, va -> nia', orbo, veff_ee, orbv) * dE[:, None, None] * 0.5
-        z1_fock_ov = cp.einsum('ab, nbi -> nai', fock_mo[nocc:, nocc:], z1_ee)
+        im0[:, :nocc, :nocc] += einsum('ui, nuv, vj -> nij', orbo, veff_ee, orbo) * dE[:, None, None] * 0.5
+        im0[:, :nocc, nocc:] += einsum('ui, nuv, va -> nia', orbo, veff_ee, orbv) * dE[:, None, None] * 0.5
+        z1_fock_ov = einsum('ab, nbi -> nai', fock_mo[nocc:, nocc:], z1_ee)
         im0[:, :nocc, nocc:] += z1_fock_ov.transpose(0, 2, 1) * dE[:, None, None] * 0.25
-        z1_fock_vo = cp.einsum('nai, ij -> naj', z1_ee, fock_mo[:nocc, :nocc])
+        z1_fock_vo = einsum('nai, ij -> naj', z1_ee, fock_mo[:nocc, :nocc])
         im0[:, nocc:, :nocc] += z1_fock_vo * dE[:, None, None] * 0.25
 
         im0 *= 2.0

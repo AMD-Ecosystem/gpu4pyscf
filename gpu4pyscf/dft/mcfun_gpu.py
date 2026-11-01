@@ -237,7 +237,7 @@ def _eval_xc_lebedev(func, rho_tm, deriv, spin_samples,
             vxc += einsum('xbygo,xgo->bygo', fxc[1], s)
             c_tm = _ts2tm_transformation(p_sgrids)
             cw_tm = c_tm * p_weights
-            vxc_eff += cp.einsum('rao,axgo->rxg', cw_tm, vxc)
+            vxc_eff += einsum('rao,axgo->rxg', cw_tm, vxc)
 
         if deriv > 1:
             kxc = xc_orig[3].reshape(2, nvar, 2, nvar, 2, nvar, ngrids, nsg)
@@ -245,8 +245,8 @@ def _eval_xc_lebedev(func, rho_tm, deriv, spin_samples,
             fxc[0,:,1] *= 2
             fxc[1,:,0] *= 2
             fxc += einsum('xbyczgo,xgo->byczgo', kxc[1], s)
-            fxc = cp.einsum('rao,axbygo->rxbygo', c_tm, fxc)
-            fxc_eff += cp.einsum('sbo,rxbygo->rxsyg', cw_tm, fxc)
+            fxc = einsum('rao,axbygo->rxbygo', c_tm, fxc)
+            fxc_eff += einsum('sbo,rxbygo->rxsyg', cw_tm, fxc)
 
         if deriv > 2:
             lxc = xc_orig[4].reshape(2, nvar, 2, nvar, 2, nvar, 2, nvar, ngrids, nsg)
@@ -259,10 +259,10 @@ def _eval_xc_lebedev(func, rho_tm, deriv, spin_samples,
             kxc[0,:,0,:,1] *= 2
 
             kxc += einsum('wbxcydzgo,wgo->bxcydzgo', lxc[1], s)
-            kxc = cp.einsum('rao,axbyczgo->rxbyczgo', c_tm, kxc)
-            kxc = cp.einsum('sbo,rxbyczgo->rxsyczgo', c_tm, kxc)
+            kxc = einsum('rao,axbyczgo->rxbyczgo', c_tm, kxc)
+            kxc = einsum('sbo,rxbyczgo->rxsyczgo', c_tm, kxc)
             # kxc = cp.einsum('rao,sbo,axbyczgo->rxsyczgo', c_tm, c_tm,kxc)
-            kxc_eff += cp.einsum('tco,rxsyczgo->rxsytzg', cw_tm, kxc)
+            kxc_eff += einsum('tco,rxsyczgo->rxsytzg', cw_tm, kxc)
 
     # exc in libxc is defined as Exc per particle. exc_eff calculated above is exc*rho.
     # Divide exc_eff by rho so as to follow the convention of libxc
@@ -322,13 +322,13 @@ def _project_spin_sph(rho_tm, sgrids):
     if rho_tm.ndim == 2:
         rho_ts = cp.empty((2, ngrids, nsg))
         rho_ts[0] = rho[:, cp.newaxis]
-        rho_ts[1] = cp.einsum('mg,om->go', m, sgrids)
+        rho_ts[1] = einsum('mg,om->go', m, sgrids)
         rho_ts = rho_ts.reshape(2, ngrids*nsg)
     else:
         nvar = rho_tm.shape[1]
         rho_ts = cp.empty((2, nvar, ngrids, nsg))
         rho_ts[0] = rho[:, :, cp.newaxis]
-        rho_ts[1] = cp.einsum('mxg,om->xgo', m, sgrids)
+        rho_ts[1] = einsum('mxg,om->xgo', m, sgrids)
         rho_ts = rho_ts.reshape(2, nvar, ngrids*nsg)
     return rho_ts
 

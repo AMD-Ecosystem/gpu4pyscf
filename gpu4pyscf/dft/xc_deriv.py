@@ -17,7 +17,7 @@ Transform XC functional derivatives between different representations
 '''
 import numpy as np
 import cupy as cp
-from gpu4pyscf.lib.cupy_helper import contract, ndarray
+from gpu4pyscf.lib.cupy_helper import contract, ndarray, einsum
 
 def transform_vxc(rho, vxc, xctype, spin=0, work=None):
     r'''
@@ -217,13 +217,13 @@ def transform_kxc(rho, fxc, kxc, xctype, spin=0):
             vp[0,0,0] = _stack_frrr(frrr)
             i3 = cp.arange(3)
             qggg = _stack_fggg(fggg)
-            qggg = cp.einsum('abcdefg,axg->xbcdefg', qggg, rho[:,1:4])
-            qggg = cp.einsum('xbcdefg,cyg->xybdefg', qggg, rho[:,1:4])
-            qggg = cp.einsum('xybdefg,ezg->xyzbdfg', qggg, rho[:,1:4])
+            qggg = einsum('abcdefg,axg->xbcdefg', qggg, rho[:,1:4])
+            qggg = einsum('xbcdefg,cyg->xybdefg', qggg, rho[:,1:4])
+            qggg = einsum('xybdefg,ezg->xyzbdfg', qggg, rho[:,1:4])
             # qggg = _stack_fggg(fggg, rho=rho).transpose(1,3,5,0,2,4,6)
             # qggg = cp.asarray(qggg)
             qgg = _stack_fgg(fgg)
-            qgg = cp.einsum('abcdg,axg->xbcdg', qgg, rho[:,1:4])
+            qgg = einsum('abcdg,axg->xbcdg', qgg, rho[:,1:4])
             for i in range(3):
                 qggg[:,i,i] += qgg
                 qggg[i,:,i] += qgg.transpose(0,2,1,3,4)
@@ -232,8 +232,8 @@ def transform_kxc(rho, fxc, kxc, xctype, spin=0):
 
             frgg = frgg.reshape(2,6,ngrids)
             qrgg = _stack_fgg(frgg, axis=1)
-            qrgg = cp.einsum('rabcdg,axg->xrbcdg', qrgg, rho[:,1:4])
-            qrgg = cp.einsum('xrbcdg,cyg->xyrbdg', qrgg, rho[:,1:4])
+            qrgg = einsum('rabcdg,axg->xrbcdg', qrgg, rho[:,1:4])
+            qrgg = einsum('xrbcdg,cyg->xyrbdg', qrgg, rho[:,1:4])
             # qrgg = _stack_fgg(frgg.get(), axis=1, rho=rho.get()).transpose(2,4,0,1,3,5)
             qrg = _stack_fg(frg.reshape(2,3,ngrids), axis=1)
             # qrgg = cp.asarray(qrgg)
@@ -245,7 +245,7 @@ def transform_kxc(rho, fxc, kxc, xctype, spin=0):
             frrg = frrg.reshape(3,3,ngrids)
             qrrg = _stack_frr(frrg, axis=0)
             qrrg = _stack_fg(qrrg, axis=2)
-            qrrg = cp.einsum('rsabg,axg->rsxbg', qrrg, rho[:,1:4]).transpose(2,0,1,3,4)
+            qrrg = einsum('rsabg,axg->rsxbg', qrrg, rho[:,1:4]).transpose(2,0,1,3,4)
             # qrrg = _stack_fg(qrrg.get(), axis=2, rho=rho.get()).transpose(3,0,1,2,4)
             # qrrg = cp.asarray(qrrg)
             vp[0,0,1:4] = qrrg
@@ -255,8 +255,8 @@ def transform_kxc(rho, fxc, kxc, xctype, spin=0):
         if order > 1:
             fggt = fggt.reshape(6,2,ngrids)
             qggt = _stack_fgg(fggt, axis=0)
-            qggt = cp.einsum('abcdrg,axg->xbcdrg', qggt, rho[:,1:4])
-            qggt = cp.einsum('xbcdrg,cyg->xybdrg', qggt, rho[:,1:4])
+            qggt = einsum('abcdrg,axg->xbcdrg', qggt, rho[:,1:4])
+            qggt = einsum('xbcdrg,cyg->xybdrg', qggt, rho[:,1:4])
             # qggt = _stack_fgg(fggt, axis=0, rho=rho).transpose(1,3,0,2,4,5)
             qgt = _stack_fg(fgt.reshape(3,2,ngrids), axis=0)
             i3 = cp.arange(3)
@@ -267,7 +267,7 @@ def transform_kxc(rho, fxc, kxc, xctype, spin=0):
 
             qgtt = _stack_frr(fgtt.reshape(3,3,ngrids), axis=1)
             qgtt = _stack_fg(qgtt, axis=0)
-            qgtt = cp.einsum('abrsg,axg->xbrsg', qgtt, rho[:,1:4])
+            qgtt = einsum('abrsg,axg->xbrsg', qgtt, rho[:,1:4])
             # qgtt = _stack_fg(qgtt, axis=0, rho=rho).transpose(1,0,2,3,4)
             vp[1:4,4,4] = qgtt
             vp[4,1:4,4] = qgtt.transpose(0,2,1,3,4)
@@ -275,7 +275,7 @@ def transform_kxc(rho, fxc, kxc, xctype, spin=0):
 
             frgt = frgt.reshape(2,3,2,ngrids)
             qrgt = _stack_fg(frgt, axis=1)
-            qrgt = cp.einsum('rabsg,axg->xrbsg', qrgt, rho[:,1:4])
+            qrgt = einsum('rabsg,axg->xrbsg', qrgt, rho[:,1:4])
             # qrgt = _stack_fg(frgt, axis=1, rho=rho).transpose(2,0,1,3,4)
             vp[0,1:4,4] = qrgt
             vp[0,4,1:4] = qrgt.transpose(0,1,3,2,4)

@@ -33,6 +33,7 @@ from pyscf.cc import _ccsd
 from pyscf import __config__
 from gpu4pyscf.lib.cupy_helper import (
     load_library, get_avail_mem, fill_symmetric, contract)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.lib import logger
 from gpu4pyscf.scf import int4c2e
 
@@ -52,7 +53,7 @@ def update_amps(mycc, t1, t2, eris):
     wpq, t1new, t2new, wVOov, wVooV = _direct_ovvv_vvvv(mycc, t1, t2)
     t2new *= .5  # *.5 because t2+t2.transpose(1,0,3,2) at the end
 
-    _einsum = cupy.einsum
+    _einsum = einsum
 
     fov = fock[:nocc,nocc:].copy()
     t1new += fock[:nocc,nocc:]

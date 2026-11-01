@@ -122,7 +122,7 @@ def get_ab(td, mf, mo_energy=None, mo_coeff=None, mo_occ=None):
         Q = Kinv @ R
         Qs = 0.5*(Q+Q.T)
         
-        q_sym = cp.einsum('gh,hkl->gkl', Qs, vmat)
+        q_sym = einsum('gh,hkl->gkl', Qs, vmat)
         kEao = contract('gij,gkl->ijkl', vmat, q_sym)
 
         kEmo_aa = contract('pjkl,pi->ijkl', kEao, orbo_a.conj())
@@ -767,8 +767,8 @@ class TDBase(tdhf_gpu.TDBase):
         orbv_b = mo_coeff[1][:,mo_occ[1]==0]
         ints = asarray(ints)
 
-        ints_a = cp.einsum('...pq,pi,qj->...ij', ints, orbo_a.conj(), orbv_a)
-        ints_b = cp.einsum('...pq,pi,qj->...ij', ints, orbo_b.conj(), orbv_b)
+        ints_a = einsum('...pq,pi,qj->...ij', ints, orbo_a.conj(), orbv_a)
+        ints_b = einsum('...pq,pi,qj->...ij', ints, orbo_b.conj(), orbv_b)
         pol = [(einsum('...ij,ij->...', ints_a, x[0]).get() +
                 einsum('...ij,ij->...', ints_b, x[1]).get()) for x,y in xy]
         pol = np.array(pol)
@@ -847,8 +847,8 @@ class TDA(TDBase):
 
         Xa_mo = cp.stack([asarray(x[0]) for x, y in xy])
         Xb_mo = cp.stack([asarray(x[1]) for x, y in xy])
-        Xa_mo = cp.einsum('ui,nij,vj->nuv', Sa_occ, Xa_mo, Sa_vir)
-        Xb_mo = cp.einsum('ui,nij,vj->nuv', Sb_occ, Xb_mo, Sb_vir)
+        Xa_mo = einsum('ui,nij,vj->nuv', Sa_occ, Xa_mo, Sa_vir)
+        Xb_mo = einsum('ui,nij,vj->nuv', Sb_occ, Xb_mo, Sb_vir)
         x0 = cp.hstack((Xa_mo.reshape(nstates, -1), Xb_mo.reshape(nstates, -1)))
         Y_mo = xy[0][1][0]
         if not isinstance(Y_mo, (np.ndarray, cp.ndarray)):
@@ -856,8 +856,8 @@ class TDA(TDBase):
 
         Ya_mo = cp.stack([asarray(y[0]) for x, y in xy])
         Yb_mo = cp.stack([asarray(y[1]) for x, y in xy])
-        Ya_mo = cp.einsum('ui,nij,vj->nuv', Sa_occ, Ya_mo, Sa_vir)
-        Yb_mo = cp.einsum('ui,nij,vj->nuv', Sb_occ, Yb_mo, Sb_vir)
+        Ya_mo = einsum('ui,nij,vj->nuv', Sa_occ, Ya_mo, Sa_vir)
+        Yb_mo = einsum('ui,nij,vj->nuv', Sb_occ, Yb_mo, Sb_vir)
         return cp.hstack((x0, Ya_mo.reshape(nstates, -1), Yb_mo.reshape(nstates, -1)))
 
     def kernel(self, x0=None, nstates=None):
@@ -1054,9 +1054,9 @@ class SpinFlipTDA(TDBase):
 
         X_mo = cp.stack([asarray(x) for x, y in xy])
         if self.extype == 0:
-            X_mo = cp.einsum('ui,nij,vj->nuv', Sb_occ, X_mo, Sa_vir)
+            X_mo = einsum('ui,nij,vj->nuv', Sb_occ, X_mo, Sa_vir)
         elif self.extype == 1:
-            X_mo = cp.einsum('ui,nij,vj->nuv', Sa_occ, X_mo, Sb_vir)
+            X_mo = einsum('ui,nij,vj->nuv', Sa_occ, X_mo, Sb_vir)
 
         Y_mo = xy[0][1]
         if not isinstance(Y_mo, (np.ndarray, cp.ndarray)):
@@ -1064,9 +1064,9 @@ class SpinFlipTDA(TDBase):
 
         Y_mo = cp.stack([asarray(y) for x, y in xy])
         if self.extype == 0:
-            Y_mo = cp.einsum('ui,nij,vj->nuv', Sa_occ, Y_mo, Sb_vir)
+            Y_mo = einsum('ui,nij,vj->nuv', Sa_occ, Y_mo, Sb_vir)
         elif self.extype == 1:
-            Y_mo = cp.einsum('ui,nij,vj->nuv', Sb_occ, Y_mo, Sa_vir)
+            Y_mo = einsum('ui,nij,vj->nuv', Sb_occ, Y_mo, Sa_vir)
         return cp.hstack((X_mo.reshape(nstates, -1), Y_mo.reshape(nstates, -1)))
 
     def dump_flags(self, verbose=None):

@@ -621,7 +621,7 @@ class TestFiniteDifference(unittest.TestCase):
         cp.random.seed(11)
         dm = cp.random.rand(nkpts, nao, nao) * .2
         expLk = fft_matrix(kmesh)
-        dm = cp.einsum('Lk,Lpq->kpq', expLk.conj(), dm)
+        dm = einsum('Lk,Lpq->kpq', expLk.conj(), dm)
         dm = dm + dm.conj().transpose(0,2,1)
         ref = vppnl_nuc_grad(cell, dm, kpts) / nkpts
         dat = ppnl_derivatives(cell, dm, kpts)

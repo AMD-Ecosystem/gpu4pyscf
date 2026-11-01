@@ -16,6 +16,7 @@ import cupy as cp
 import pyscf
 from pyscf import lib
 from gpu4pyscf.gto import mole as mole_gpu
+from gpu4pyscf.lib.cupy_helper import einsum
 
 def test_basis_seg_contraction():
     mol = pyscf.M(
@@ -151,7 +152,7 @@ def test_apply_C_dot():
     cp.random.seed(9)
     c = cp.random.rand(3,nao,9)+.2j*cp.random.rand(3,nao,9)
     mol = mole_gpu.SortedGTO.from_mol(mol)
-    ref = cp.einsum('pq,sqi->spi', mol.ctr_coeff, c)
+    ref = einsum('pq,sqi->spi', mol.ctr_coeff, c)
     dat = mol.apply_C_dot(c, axis=1)
     assert abs(ref - dat).max() < 1e-15
 

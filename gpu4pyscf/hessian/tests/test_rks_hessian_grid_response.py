@@ -158,15 +158,15 @@ def _get_vxc_deriv1_numerical(hessobj, mo_coeff, mo_occ, max_memory):
     if dm0.ndim == 3:
         mocc0 = mo_coeff[0][:, mo_occ[0]>0]
         mocc1 = mo_coeff[1][:, mo_occ[1]>0]
-        vmat0 = cp.einsum('Adij,jq->Adiq', vmat[:,:,0,:,:], mocc0)
-        vmat0 = cp.einsum('Adiq,ip->Adpq', vmat0, mo_coeff[0])
-        vmat1 = cp.einsum('Adij,jq->Adiq', vmat[:,:,1,:,:], mocc1)
-        vmat1 = cp.einsum('Adiq,ip->Adpq', vmat1, mo_coeff[1])
+        vmat0 = einsum('Adij,jq->Adiq', vmat[:,:,0,:,:], mocc0)
+        vmat0 = einsum('Adiq,ip->Adpq', vmat0, mo_coeff[0])
+        vmat1 = einsum('Adij,jq->Adiq', vmat[:,:,1,:,:], mocc1)
+        vmat1 = einsum('Adiq,ip->Adpq', vmat1, mo_coeff[1])
         return vmat0, vmat1
     else:
         mocc = mo_coeff[:,mo_occ>0]
-        vmat = cp.einsum('Adij,jq->Adiq', vmat, mocc)
-        vmat = cp.einsum('Adiq,ip->Adpq', vmat, mo_coeff)
+        vmat = einsum('Adij,jq->Adiq', vmat, mocc)
+        vmat = einsum('Adiq,ip->Adpq', vmat, mo_coeff)
         return vmat
 
 class KnownValues(unittest.TestCase):

@@ -21,6 +21,7 @@ from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.utils import splits_by_blocksize
 from gpu4pyscf.lib.cupy_helper import (
     contract, asarray, ndarray, cholesky, eigh, transpose_sum, get_avail_mem)
+from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.grad import rhf as rhf_grad
 from gpu4pyscf.df.int3c2e_bdiv import (
     _split_l_ctr_pattern, argsort_aux, get_ao_pair_loc,
@@ -136,7 +137,7 @@ def _jk_energy_per_atom(int3c2e_opt, dm, j_factor=1, k_factor=1, hermi=0,
     else:
         metric = aux_coeff.dot(_gen_metric_solver(j2c, 'ED')(aux_coeff.T))
     j2c = aux_coeff = None
-    dm_oo = cp.einsum('uv,vij->uij', metric, j3c_oo)
+    dm_oo = einsum('uv,vij->uij', metric, j3c_oo)
     metric = j3c_oo = None
     if j_factor != 0:
         auxvec = dm_oo.trace(axis1=1, axis2=2)

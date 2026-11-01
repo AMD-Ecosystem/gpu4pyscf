@@ -620,7 +620,7 @@ class KnownValues(unittest.TestCase):
         test_coeff = test_dm0.mo_coeff
 
         assert cp.max(cp.abs(test_dm0 - ref_dm0)) < 1e-10
-        CtestT_S_Cref = cp.einsum("upi,pq,uqj->uij", test_coeff, S, ref_coeff)
+        CtestT_S_Cref = einsum("upi,pq,uqj->uij", test_coeff, S, ref_coeff)
         assert cp.max(cp.abs(cp.abs(CtestT_S_Cref) - cp.eye(mol.nao)[None,:,:])) < 1e-10
 
     def test_vsap_guess_rhf(self):
@@ -715,7 +715,7 @@ class KnownValues(unittest.TestCase):
         test_coeff = test_dm0.mo_coeff
 
         assert cp.max(cp.abs(test_dm0 - ref_dm0)) < 1e-10
-        CtestT_S_Cref = cp.einsum("upi,pq,uqj->uij", test_coeff, S, ref_coeff)
+        CtestT_S_Cref = einsum("upi,pq,uqj->uij", test_coeff, S, ref_coeff)
         assert cp.max(cp.abs(cp.abs(CtestT_S_Cref) - cp.eye(mol.nao)[None,:,:])) < 1e-10
 
 if __name__ == "__main__":

@@ -297,7 +297,7 @@ def contract_d2S_diagonal(surface, dF, prefactor, surface_discretization_method 
 
         dF_prefactor = d2F_prefactor / Fi
         dFi = dF[:,:,p0:p1]
-        d2Sii += 2 * cupy.einsum("Adq,BDq->ABdD", dFi * dF_prefactor, dFi)
+        d2Sii += 2 * einsum("Adq,BDq->ABdD", dFi * dF_prefactor, dFi)
 
         del d2F_prefactor, dF_prefactor
 

@@ -24,7 +24,7 @@ from pyscf import lib
 from pyscf.gto import mole
 from pyscf.data import nist
 from pyscf.x2c import x2c as x2c_cpu
-from gpu4pyscf.lib.cupy_helper import block_diag, asarray, hermi_triu
+from gpu4pyscf.lib.cupy_helper import block_diag, asarray, hermi_triu, einsum
 from gpu4pyscf.lib.cusolver import eigh
 from gpu4pyscf.lib import logger
 from gpu4pyscf.scf import hf, ghf
@@ -502,7 +502,7 @@ def _sigma_dot(mat):
     '''sigma dot A x B + A dot B'''
     quaternion = np.vstack([1j * lib.PauliMatrices, np.eye(2)[None,:,:]])
     if isinstance(mat, cp.ndarray):
-        out = cp.einsum('sxy,spq->xpyq', asarray(quaternion), mat)
+        out = einsum('sxy,spq->xpyq', asarray(quaternion), mat)
     else:
         out = np.einsum('sxy,spq->xpyq', quaternion, mat)
     nao = mat.shape[-1] * 2

@@ -345,7 +345,7 @@ def test_ejk_derivatives_kpts_without_long_range():
     nocc = 9
     mo_occ = np.zeros((nkpts, nao))
     mo_occ[:,:nocc] = 2
-    dm = cp.einsum('kpi,ki,kqi->kpq', mo_coeff, mo_occ, mo_coeff.conj())
+    dm = einsum('kpi,ki,kqi->kpq', mo_coeff, mo_occ, mo_coeff.conj())
     omega = -0.3
     opt = int3c2e.SRInt3c2eOpt(cell, auxcell, omega, kmesh).build()
     j_factor = 1
@@ -415,7 +415,7 @@ def test_ejk_derivatives_kpts_with_long_range():
     nocc = 9
     mo_occ = np.zeros((nkpts, nao))
     mo_occ[:,:nocc] = 2
-    dm = cp.einsum('kpi,ki,kqi->kpq', mo_coeff, mo_occ, mo_coeff.conj())
+    dm = einsum('kpi,ki,kqi->kpq', mo_coeff, mo_occ, mo_coeff.conj())
     omega = -0.3
     opt = int3c2e.SRInt3c2eOpt(cell, auxcell, omega, kmesh).build()
     j_factor = 1
@@ -486,7 +486,7 @@ def test_ejk_derivatives_kpts_with_long_range1():
     mo_occ[:,:3] = 2
     omega = -0.3
 
-    dm = cp.einsum('kpi,ki,kqi->kpq', mo_coeff, mo_occ, mo_coeff.conj())
+    dm = einsum('kpi,ki,kqi->kpq', mo_coeff, mo_occ, mo_coeff.conj())
     opt = int3c2e.SRInt3c2eOpt(cell, auxcell, omega, kmesh).build()
     j_factor = 1
     k_factor = 1
@@ -618,7 +618,7 @@ def test_uhf_ejk_derivatives_kpts_without_long_range():
     nocc = 9
     mo_occ = cp.zeros((2, nkpts, nao))
     mo_occ[:,:,:nocc] = 1
-    dm = cp.einsum('skpi,ski,skqi->skpq', mo_coeff, mo_occ, mo_coeff.conj())
+    dm = einsum('skpi,ski,skqi->skpq', mo_coeff, mo_occ, mo_coeff.conj())
     omega = -0.3
     opt = int3c2e.SRInt3c2eOpt(cell, auxcell, omega, kmesh).build()
     j_factor = 1
@@ -686,7 +686,7 @@ def test_uhf_ejk_derivatives_kpts_with_long_range():
     nocc = 7
     mo_occ = cp.zeros((2, nkpts, nao))
     mo_occ[:,:,:nocc] = 1
-    dm = cp.einsum('skpi,ski,skqi->skpq', mo_coeff, mo_occ, mo_coeff.conj())
+    dm = einsum('skpi,ski,skqi->skpq', mo_coeff, mo_occ, mo_coeff.conj())
     omega = -0.3
     opt = int3c2e.SRInt3c2eOpt(cell, auxcell, omega, kmesh).build()
     j_factor = 1
@@ -757,7 +757,7 @@ def test_uhf_ejk_derivatives_kpts_with_long_range1():
     mo_occ[:,:,:3] = 2
     omega = -0.3
 
-    dm = cp.einsum('skpi,ski,skqi->skpq', mo_coeff, mo_occ, mo_coeff.conj())
+    dm = einsum('skpi,ski,skqi->skpq', mo_coeff, mo_occ, mo_coeff.conj())
     opt = int3c2e.SRInt3c2eOpt(cell, auxcell, omega, kmesh).build()
     j_factor = .5
     k_factor = 1
@@ -821,7 +821,7 @@ def _gamma_df_energy(cell, auxcell, dm, omega, k_factor):
     rho = einsum('rij,ji->r', cderi, dm)
     energy = .5 * rho.dot(rho)
     if k_factor:
-        ld = cp.einsum('rij,jk->rik', cderi, dm)
+        ld = einsum('rij,jk->rik', cderi, dm)
         energy -= .25 * k_factor * einsum('rij,rji->', ld, ld)
     return float(energy.get())
 

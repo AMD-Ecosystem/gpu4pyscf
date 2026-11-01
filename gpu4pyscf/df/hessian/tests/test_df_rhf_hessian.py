@@ -262,7 +262,7 @@ class KnownValues(unittest.TestCase):
             auxmol1 = auxmol0.set_geom_(atom_coords, unit='Bohr')
             j3c = cp.array(incore.aux_e2(mol1, auxmol1))
             j2c = cp.array(auxmol1.intor('int2c2e'))
-            eri = cp.einsum('ijp,pq,klq->ijkl', j3c, cp.linalg.inv(j2c), j3c)
+            eri = einsum('ijp,pq,klq->ijkl', j3c, cp.linalg.inv(j2c), j3c)
             vj = einsum('ijkl,ji->kl', eri, dm)
             vk = einsum('ijkl,jk->il', eri, dm)
             return vj - .5 * vk

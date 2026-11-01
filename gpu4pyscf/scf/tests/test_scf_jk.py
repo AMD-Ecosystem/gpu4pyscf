@@ -20,6 +20,7 @@ import pyscf
 from pyscf import lib, gto
 from gpu4pyscf.scf import jk
 from pyscf.scf.hf import get_jk
+from gpu4pyscf.lib.cupy_helper import einsum
 
 def test_jk_hermi1():
     mol = pyscf.M(
@@ -228,7 +229,7 @@ def test_k_hermi1():
     nao = mol.nao
     dm = np.random.rand(2, nao, nao) - .5
     dm = cp.asarray(dm)
-    dm = cp.einsum('nij,nkj->nik', dm, dm)
+    dm = einsum('nij,nkj->nik', dm, dm)
 
     ref = jk.get_jk(mol, dm, hermi=1)[1].get()
     vk = jk.get_k(mol, dm, hermi=1).get()

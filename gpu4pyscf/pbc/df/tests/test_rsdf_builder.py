@@ -24,6 +24,7 @@ from gpu4pyscf.pbc.df.rsdf_builder import build_cderi
 from gpu4pyscf.pbc.df import rsdf_builder
 from gpu4pyscf.pbc.lib.kpts_helper import conj_images_in_bvk_cell
 import pytest
+from gpu4pyscf.lib.cupy_helper import einsum
 
 def test_gamma_point():
     cell = pyscf.M(
@@ -712,7 +713,7 @@ def test_diffuse_only():
 
     full, _ = build_cderi(cell, auxcell, int3c2e_opt=opt)
     excluded, _ = build_cderi(cell, auxcell, exclude_dd=True, int3c2e_opt=opt)
-    eri = cp.einsum('pij,pkl->ijkl', full[0,0], full[0,0])
+    eri = einsum('pij,pkl->ijkl', full[0,0], full[0,0])
     assert abs(lib.fp(eri.get()) - 0.002616152259096199) < 1e-10
     assert cp.all(excluded[0,0] == 0)
 
@@ -726,7 +727,7 @@ def test_diffuse_only():
     full, _ = build_cderi(cell, auxcell, kpts, kmesh=kmesh, int3c2e_opt=opt)
     excluded, _ = build_cderi(cell, auxcell, kpts, kmesh=kmesh,
                               exclude_dd=True, int3c2e_opt=opt)
-    eri = cp.einsum('pij,pkl->ijkl', full[0,0], full[0,0])
+    eri = einsum('pij,pkl->ijkl', full[0,0], full[0,0])
     assert abs(lib.fp(eri.get()) - 0.002616152259096199) < 1e-10
     assert cp.all(excluded[0,0] == 0)
 
