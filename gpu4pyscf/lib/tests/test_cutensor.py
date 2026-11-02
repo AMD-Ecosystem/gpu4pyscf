@@ -163,6 +163,58 @@ class KnownValues(unittest.TestCase):
             n_matvec += n_ref > 0
         assert n_matvec > 20
 
+    def test_hip_einsum_complex_large(self):
+        # A complex matrix product with more than 2**21 columns, the shape of
+        # the k-point transform in pbc.df.ft_ao
+        expLk = cupy.random.rand(2, 2) + 1j * cupy.random.rand(2, 2)
+        a = cupy.random.rand(2, 2, 2, (1 << 19) + 8) * (1 + 1j)
+        ref = numpy.einsum('Lk,pLqG->kpqG', expLk.get(), a.get())
+        out = einsum('Lk,pLqG->kpqG', expLk, a)
+        assert abs(out.get() - ref).max() < 1e-12
+        out = contract('Lk,pLqG->kpqG', expLk, a)
+        assert abs(out.get() - ref).max() < 1e-12
+
+    def test_hip_einsum_complex_split(self):
+        # With the column limit lowered to 3, _hip_einsum issues no complex
+        # matrix product with more than 3 rows or columns
+        from unittest import mock
+        from cupy._core import _accelerator
+        from gpu4pyscf.lib import cutensor
+        matmul = cupy.matmul
+        def record(a, b, *args, **kwargs):
+            if a.dtype.kind == 'c' and max(a.shape[-2], b.shape[-1]) > 3:
+                calls[0] += 1
+            return matmul(a, b, *args, **kwargs)
+        rng = numpy.random.RandomState(11)
+        labels = 'abcdef'
+        size = {c: n for c, n in zip(labels, (2, 3, 4, 5, 7, 3))}
+        accelerators = list(_accelerator.get_routine_accelerators())
+        _accelerator.set_routine_accelerators([])
+        n_large = 0
+        try:
+            for _ in range(300):
+                subs = [''.join(rng.permutation(list(labels))[:rng.randint(1, 5)])
+                        for _ in range(rng.randint(2, 4))]
+                used = ''.join(dict.fromkeys(''.join(subs)))
+                out = rng.permutation(list(used))[:rng.randint(0, len(used))]
+                subscripts = ','.join(subs) + '->' + ''.join(out)
+                operands = [cupy.asarray(rng.rand(*[size[c] for c in s]) * (1 + 1j))
+                            for s in subs]
+                with mock.patch.object(cutensor, '_HIP_MAX_COLS', 3), \
+                     mock.patch.object(cupy, 'matmul', record):
+                    calls = [0]
+                    cupy.einsum(subscripts, *operands)
+                    n_large += calls[0] > 0
+                    calls = [0]
+                    res = cutensor._hip_einsum(subscripts, *operands)
+                    assert calls[0] == 0, subscripts
+                expected = numpy.einsum(subscripts, *[x.get() for x in operands])
+                assert res.shape == expected.shape, subscripts
+                assert abs(res.get() - expected).max() < 1e-10, subscripts
+        finally:
+            _accelerator.set_routine_accelerators(accelerators)
+        assert n_large > 50
+
 if __name__ == "__main__":
     print("Full tests for cutensor module")
     unittest.main()

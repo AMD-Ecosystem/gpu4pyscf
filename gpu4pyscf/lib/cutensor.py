@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import string
 import numpy as np
 import cupy
@@ -54,10 +55,12 @@ def _create_tensor_descriptor(a):
     return cutensor.create_tensor_descriptor(a)
 
 _HIP_MAX_BATCH = 65535
+_HIP_MAX_COLS = 1 << 21
 
 def _hip_einsum(subscripts, *operands, **kwargs):
     '''cupy.einsum, except that a matrix-vector product over more than 65535
-    batches is computed as a broadcast multiply and sum.
+    batches is computed as a broadcast multiply and sum, and a complex
+    matrix product with more than 2**21 rows or columns is computed in parts.
 
     cupy.einsum drops size-1 axes and then computes each pairwise contraction
     as a batched matmul (B, L, K) @ (B, K, R). When L or R is 1, rocBLAS may
@@ -66,6 +69,11 @@ def _hip_einsum(subscripts, *operands, **kwargs):
     (https://github.com/ROCm/rocm-libraries/issues/14819). Splitting the batch
     would avoid the loop, but the multiply and sum is also several times faster
     for these shapes.
+
+    For complex types, rocBLAS runs a kernel that places its 32-column tiles
+    in grid dimension y. gfx12 GPUs pass the y and z work-group IDs to a
+    kernel as 16-bit values, so the tiles past 65536 * 32 = 2**21 columns are
+    never written.
     '''
     if (not isinstance(subscripts, str) or kwargs or len(operands) < 2 or
             not all(isinstance(x, cupy.ndarray) for x in operands) or
@@ -112,11 +120,13 @@ def _hip_einsum(subscripts, *operands, **kwargs):
     keeps = []
     sb, lb = subs[-1], dims[-1]
     regime = False
+    is_complex = any(x.dtype.kind == 'c' for x in operands)
     for i in range(len(subs) - 2, -1, -1):
         rest = ''.join(''.join(d) for d in dims[:i]) + out
         keep = out if i == 0 else ''.join(
             c for c in dict.fromkeys(subs[i] + sb) if c in rest)
         regime |= _hip_matvec_batch(dims[i], lb, keep, size) > _HIP_MAX_BATCH
+        regime |= is_complex and _hip_gemm_cols(dims[i], lb, keep, size) > _HIP_MAX_COLS
         keeps.append(keep)
         sb, lb = keep, (dims[i] | lb) & set(keep)
     if not regime:
@@ -140,12 +150,43 @@ def _hip_matvec_batch(la, lb, out, size):
         return 0
     return int(np.prod([size[c] for c in la & lb & out]))
 
+def _hip_gemm_cols(la, lb, out, size):
+    '''The larger of the row and column counts if cupy.einsum computes the
+    contraction of operands with the non-trivial axes la and lb as a matrix
+    product, otherwise 0'''
+    out = set(out)
+    if not (la & lb) - out:
+        return 0
+    return max(math.prod(size[c] for c in (la & out) - lb),
+               math.prod(size[c] for c in (lb & out) - la))
+
 def _hip_einsum2(a, sa, b, sb, out):
     la = {c for c, n in zip(sa, a.shape) if n > 1}
     lb = {c for c, n in zip(sb, b.shape) if n > 1}
     size = dict(zip(sa, a.shape))
     for c, n in zip(sb, b.shape):
         size[c] = max(size.get(c, 1), n)
+    if (np.result_type(a, b).kind == 'c' and
+            _hip_gemm_cols(la, lb, out, size) > _HIP_MAX_COLS):
+        # Split the outermost free axis of the operand with more free entries
+        # into parts of at most _HIP_MAX_COLS free entries; a part that is
+        # still too large is split again in the recursive call.
+        free = [[c for c in out if c in la and c not in lb],
+                [c for c in out if c in lb and c not in la]]
+        n = [math.prod(size[c] for c in f) for f in free]
+        side = int(n[1] > n[0])
+        c = free[side][0]
+        step = max(1, size[c] * _HIP_MAX_COLS // n[side])
+        x, sx = (a, sa) if side == 0 else (b, sb)
+        res = cupy.empty([size[l] for l in out], dtype=np.result_type(a, b))
+        for p0 in range(0, size[c], step):
+            part = x[(slice(None),) * sx.index(c) + (slice(p0, p0+step),)]
+            if side == 0:
+                part = _hip_einsum2(part, sa, b, sb, out)
+            else:
+                part = _hip_einsum2(a, sa, part, sb, out)
+            res[(slice(None),) * out.index(c) + (slice(p0, p0+step),)] = part
+        return res
     if _hip_matvec_batch(la, lb, out, size) <= _HIP_MAX_BATCH:
         return cupy.einsum(f'{sa},{sb}->{out}', a, b)
     idx = [c for c in dict.fromkeys(out + sa + sb)
