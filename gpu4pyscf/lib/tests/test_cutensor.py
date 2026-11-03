@@ -165,10 +165,24 @@ class KnownValues(unittest.TestCase):
 
     def test_hip_einsum_complex_large(self):
         # A complex matrix product with more than 2**21 columns, the shape of
-        # the k-point transform in pbc.df.ft_ao
+        # the k-point transform in pbc.df.ft_ao. The split, which only gfx12
+        # GPUs take, is forced first so that it is tested on every GPU.
+        from unittest import mock
+        from gpu4pyscf.lib import cutensor
+        matmul = cupy.matmul
+        def record(a, b, *args, **kwargs):
+            if a.dtype.kind == 'c' and max(a.shape[-2], b.shape[-1]) > 1 << 21:
+                calls[0] += 1
+            return matmul(a, b, *args, **kwargs)
         expLk = cupy.random.rand(2, 2) + 1j * cupy.random.rand(2, 2)
         a = cupy.random.rand(2, 2, 2, (1 << 19) + 8) * (1 + 1j)
         ref = numpy.einsum('Lk,pLqG->kpqG', expLk.get(), a.get())
+        calls = [0]
+        with mock.patch.object(cutensor, '_hip_split_complex', lambda: True), \
+             mock.patch.object(cupy, 'matmul', record):
+            out = cutensor._hip_einsum('Lk,pLqG->kpqG', expLk, a)
+        assert calls[0] == 0
+        assert abs(out.get() - ref).max() < 1e-12
         out = einsum('Lk,pLqG->kpqG', expLk, a)
         assert abs(out.get() - ref).max() < 1e-12
         out = contract('Lk,pLqG->kpqG', expLk, a)
@@ -201,6 +215,7 @@ class KnownValues(unittest.TestCase):
                 operands = [cupy.asarray(rng.rand(*[size[c] for c in s]) * (1 + 1j))
                             for s in subs]
                 with mock.patch.object(cutensor, '_HIP_MAX_COLS', 3), \
+                     mock.patch.object(cutensor, '_hip_split_complex', lambda: True), \
                      mock.patch.object(cupy, 'matmul', record):
                     calls = [0]
                     cupy.einsum(subscripts, *operands)
@@ -214,6 +229,17 @@ class KnownValues(unittest.TestCase):
         finally:
             _accelerator.set_routine_accelerators(accelerators)
         assert n_large > 50
+
+    def test_hip_split_complex_gate(self):
+        from gpu4pyscf.lib import cutensor
+        assert cutensor._hip_is_gfx12('gfx1200')
+        assert cutensor._hip_is_gfx12(b'gfx1201')
+        for arch in ('gfx90a:sramecc+:xnack-', 'gfx942', 'gfx1100', b'gfx1151', ''):
+            assert not cutensor._hip_is_gfx12(arch)
+        if cupy.cuda.runtime.is_hip:
+            props = cupy.cuda.runtime.getDeviceProperties(cupy.cuda.Device().id)
+            assert (cutensor._hip_split_complex() ==
+                    props['gcnArchName'].decode().startswith('gfx12'))
 
 if __name__ == "__main__":
     print("Full tests for cutensor module")

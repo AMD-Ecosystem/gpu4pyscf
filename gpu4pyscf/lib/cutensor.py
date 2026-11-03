@@ -56,11 +56,13 @@ def _create_tensor_descriptor(a):
 
 _HIP_MAX_BATCH = 65535
 _HIP_MAX_COLS = 1 << 21
+_hip_split_complex_by_device = {}
 
 def _hip_einsum(subscripts, *operands, **kwargs):
     '''cupy.einsum, except that a matrix-vector product over more than 65535
-    batches is computed as a broadcast multiply and sum, and a complex
-    matrix product with more than 2**21 rows or columns is computed in parts.
+    batches is computed as a broadcast multiply and sum, and on gfx12 GPUs a
+    complex matrix product with more than 2**21 rows or columns is computed in
+    parts.
 
     cupy.einsum drops size-1 axes and then computes each pairwise contraction
     as a batched matmul (B, L, K) @ (B, K, R). When L or R is 1, rocBLAS may
@@ -72,8 +74,8 @@ def _hip_einsum(subscripts, *operands, **kwargs):
 
     For complex types, rocBLAS runs a kernel that places its 32-column tiles
     in grid dimension y. gfx12 GPUs pass the y and z work-group IDs to a
-    kernel as 16-bit values, so the tiles past 65536 * 32 = 2**21 columns are
-    never written.
+    kernel as 16-bit values, so on gfx12 the tiles past 65536 * 32 = 2**21
+    columns are never written. Other GPUs pass 32-bit IDs and are not split.
     '''
     if (not isinstance(subscripts, str) or kwargs or len(operands) < 2 or
             not all(isinstance(x, cupy.ndarray) for x in operands) or
@@ -120,13 +122,14 @@ def _hip_einsum(subscripts, *operands, **kwargs):
     keeps = []
     sb, lb = subs[-1], dims[-1]
     regime = False
-    is_complex = any(x.dtype.kind == 'c' for x in operands)
+    split_complex = (any(x.dtype.kind == 'c' for x in operands) and
+                     _hip_split_complex())
     for i in range(len(subs) - 2, -1, -1):
         rest = ''.join(''.join(d) for d in dims[:i]) + out
         keep = out if i == 0 else ''.join(
             c for c in dict.fromkeys(subs[i] + sb) if c in rest)
         regime |= _hip_matvec_batch(dims[i], lb, keep, size) > _HIP_MAX_BATCH
-        regime |= is_complex and _hip_gemm_cols(dims[i], lb, keep, size) > _HIP_MAX_COLS
+        regime |= split_complex and _hip_gemm_cols(dims[i], lb, keep, size) > _HIP_MAX_COLS
         keeps.append(keep)
         sb, lb = keep, (dims[i] | lb) & set(keep)
     if not regime:
@@ -139,6 +142,22 @@ def _hip_einsum(subscripts, *operands, **kwargs):
         b = _hip_einsum2(operands[i], subs[i], b, sb, keep)
         sb = keep
     return b
+
+def _hip_is_gfx12(arch):
+    if isinstance(arch, bytes):
+        arch = arch.decode()
+    return arch.startswith('gfx12')
+
+def _hip_split_complex():
+    '''Whether complex matrix products on the current device are limited to
+    _HIP_MAX_COLS rows and columns'''
+    dev = cupy.cuda.runtime.getDevice()
+    split = _hip_split_complex_by_device.get(dev)
+    if split is None:
+        props = cupy.cuda.runtime.getDeviceProperties(dev)
+        split = _hip_is_gfx12(props.get('gcnArchName', ''))
+        _hip_split_complex_by_device[dev] = split
+    return split
 
 def _hip_matvec_batch(la, lb, out, size):
     '''The batch count if cupy.einsum computes the contraction of operands
@@ -167,7 +186,8 @@ def _hip_einsum2(a, sa, b, sb, out):
     for c, n in zip(sb, b.shape):
         size[c] = max(size.get(c, 1), n)
     if (np.result_type(a, b).kind == 'c' and
-            _hip_gemm_cols(la, lb, out, size) > _HIP_MAX_COLS):
+            _hip_gemm_cols(la, lb, out, size) > _HIP_MAX_COLS and
+            _hip_split_complex()):
         # Split the outermost free axis of the operand with more free entries
         # into parts of at most _HIP_MAX_COLS free entries; a part that is
         # still too large is split again in the recursive call.
