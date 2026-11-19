@@ -19,12 +19,12 @@ add_library(mgrid_v2 SHARED
         multigrid_v2/eval_xc_grad.cu
 )
 
-g4p_set_hip_language(mgrid_v2)
 set_target_properties(mgrid_v2 PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}
         CUDA_SEPARABLE_COMPILATION ON
-        HIP_SEPARABLE_COMPILATION ON
 )
+gpu4pyscf_configure_gpu_target(mgrid_v2)
+
 if(ENABLE_FP32_MULTIGRID)
   target_compile_definitions(mgrid_v2 PRIVATE GPU4PYSCF_ENABLE_FP32_MULTIGRID)
 endif()
@@ -49,16 +49,8 @@ add_library(mgrid_v3 SHARED
   multigrid_v3/aft_eval_mgga_mat.cu
 )
 
-g4p_set_hip_language(mgrid_v3)
-if(USE_HIP)
-  # These kernels reduce over 32-lane groups with the CUDA
-  # __shfl_down_sync(0xffffffff, ...) spelling; the shim keeps each reduction
-  # inside its 32-lane group on wave64 as well.
-  target_compile_options(mgrid_v3 PRIVATE
-    "SHELL:-include ${PROJECT_SOURCE_DIR}/cuda_to_hip_shfl.h")
-endif()
 set_target_properties(mgrid_v3 PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}
   CUDA_SEPARABLE_COMPILATION ON
-  HIP_SEPARABLE_COMPILATION ON
 )
+gpu4pyscf_configure_gpu_target(mgrid_v3)

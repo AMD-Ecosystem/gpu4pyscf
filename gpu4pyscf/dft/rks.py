@@ -19,7 +19,7 @@ from pyscf.dft import rks
 from gpu4pyscf.lib import logger
 from gpu4pyscf.dft import numint, gen_grid
 from gpu4pyscf.scf import hf, j_engine
-from gpu4pyscf.lib.cupy_helper import tag_array, asarray, einsum
+from gpu4pyscf.lib.cupy_helper import tag_array, asarray
 from pyscf import __config__
 
 __all__ = [
@@ -35,13 +35,13 @@ def prune_small_rho_grids_(ks, mol, dm, grids):
 def initialize_grids(ks, mol=None, dm=None):
     # Initialize self.grids the first time call get_veff
     if mol is None: mol = ks.mol
+    ground_state = getattr(dm, 'ndim', 0) == 2
     if ks.grids.coords is None:
         t0 = logger.init_timer(ks)
         ks.grids.build()
         #ks.grids.build(with_non0tab=True)
         ks.grids.weights = asarray(ks.grids.weights)
         ks.grids.coords = asarray(ks.grids.coords)
-        ground_state = getattr(dm, 'ndim', 0) == 2
         if ks.small_rho_cutoff > 1e-20 and ground_state:
             # Filter grids the first time setup grids
             ks.grids = prune_small_rho_grids_(ks, ks.mol, dm, ks.grids)
@@ -128,7 +128,7 @@ def get_veff(ks, mol=None, dm=None, dm_last=None, vhf_last=None, hermi=1):
         if vj_last is not None:
             vhf += asarray(vhf_last.vj)
         vxc += vhf
-        exc += float(einsum('ij,ji', dm_orig, vhf).real.get()) * .5
+        exc += float(cupy.einsum('ij,ji', dm_orig, vhf).real.get()) * .5
         if ecoul is not None:
             exc -= ecoul
         log.timer_debug1('vk', *cput2)
@@ -160,7 +160,7 @@ def energy_elec(ks, dm=None, h1e=None, vhf=None):
     if h1e is None: h1e = ks.get_hcore()
     if vhf is None or getattr(vhf, 'ecoul', None) is None:
         vhf = ks.get_veff(ks.mol, dm)
-    e1 = float(einsum('ij,ji->', h1e, dm).real.get())
+    e1 = float(cupy.einsum('ij,ji->', h1e, dm).real.get())
     ecoul = vhf.ecoul.real
     exc = vhf.exc.real
     e2 = ecoul + exc

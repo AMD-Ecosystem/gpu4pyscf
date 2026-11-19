@@ -22,7 +22,7 @@ from gpu4pyscf.df import int3c2e_bdiv as int3c2e
 from gpu4pyscf.df.grad import rhf as df_rhf_grad
 from gpu4pyscf.df.grad import uhf as df_uhf_grad
 from gpu4pyscf.df.grad.rhf import _jk_energy_per_atom
-from gpu4pyscf.lib.cupy_helper import tag_array, einsum
+from gpu4pyscf.lib.cupy_helper import tag_array
 
 atom = '''
 O       0.0000000000    -0.0000000000     0.1174000000
@@ -270,7 +270,7 @@ class KnownValues(unittest.TestCase):
         mo_occ[0,:nocc+1] = 1
         mo_occ[1,:nocc] = 1
         opt = int3c2e.Int3c2eOpt(mol, auxmol).build()
-        dm = einsum('spi,si,sqi->spq', mo_coeff, mo_occ, mo_coeff)
+        dm = cp.einsum('spi,si,sqi->spq', mo_coeff, mo_occ, mo_coeff)
         ek = _jk_energy_per_atom(opt, dm, j_factor=1, k_factor=1, hermi=1)
         assert abs(lib.fp(ek) - -43.07892861949899) < 1e-9
         assert abs(ek.sum(axis=0)).max() < 3e-11
@@ -314,7 +314,7 @@ class KnownValues(unittest.TestCase):
         mol0.omega = .15
         auxmol0.omega = .15
         opt = int3c2e.Int3c2eOpt(mol0, auxmol0).build()
-        dm = einsum('spi,si,sqi->spq', mo_coeff, mo_occ, mo_coeff)
+        dm = np.einsum('spi,si,sqi->spq', mo_coeff, mo_occ, mo_coeff)
         ek = _jk_energy_per_atom(opt, dm, j_factor=1, k_factor=1, hermi=1)
         assert abs(ek.sum(axis=0)).max() < 1e-12
 
@@ -329,8 +329,8 @@ class KnownValues(unittest.TestCase):
             j3c = aux_e2(mol1, auxmol1)
             j2c = auxmol1.intor('int2c2e')
             eri = lib.einsum('ijp,pq,klq->ijkl', j3c, inv(j2c), j3c)
-            ref = .5 * einsum('ijkl,mji,nlk->', eri, dm, dm)
-            ref -= .5 * einsum('ijkl,sjk,sli->', eri, dm, dm)
+            ref = .5 * np.einsum('ijkl,mji,nlk->', eri, dm, dm)
+            ref -= .5 * np.einsum('ijkl,sjk,sli->', eri, dm, dm)
             atom_coords[i,x] -= disp
             return ref
 
@@ -338,6 +338,37 @@ class KnownValues(unittest.TestCase):
             e1 = eval_jk(i, x, disp)
             e2 = eval_jk(i, x, -disp)
             assert abs((e1 - e2)/(2*disp)- ek[i,x]) < 2e-4
+
+    # issue 754
+    def test_quasi_lindep_auxbasis(self):
+        mol = pyscf.M(atom=[('H', (0, 0, i*.7)) for i in range(4)],
+                      basis='sto-3g', verbose=0)
+        dm = np.eye(4) + .2
+
+        # Use delta=1e-3 as a better-conditioned, approximate reference.
+        delta = 1e-3
+        auxmol_ref = pyscf.df.addons.make_auxmol(mol, {
+            'H': [[0, [.5*(1-delta), 1.]],
+                  [0, [.5*(1+delta), 1.]], [0, [2., 1.]]],
+        })
+        opt_ref = int3c2e.Int3c2eOpt(mol, auxmol_ref).build()
+
+        # At delta=1e-4, forming the inverse metric amplifies roundoff errors.
+        delta = 1e-4
+        auxmol = pyscf.df.addons.make_auxmol(mol, {
+            'H': [[0, [.5*(1-delta), 1.]],
+                  [0, [.5*(1+delta), 1.]], [0, [2., 1.]]],
+        })
+        opt = int3c2e.Int3c2eOpt(mol, auxmol).build()
+
+        ref = df_rhf_grad._jk_energy_per_atom(opt_ref, dm, hermi=1)
+        grad = df_rhf_grad._jk_energy_per_atom(opt, dm, hermi=1)
+        assert abs(grad - ref).max() < 1e-8
+
+        dm_uhf = np.array([.6*dm, .4*dm])
+        ref = df_uhf_grad._jk_energy_per_atom(opt_ref, dm_uhf, hermi=1)
+        grad = df_uhf_grad._jk_energy_per_atom(opt, dm_uhf, hermi=1)
+        assert abs(grad - ref).max() < 1e-8
 
 if __name__ == "__main__":
     print("Full Tests for DF RHF Gradient")

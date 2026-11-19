@@ -26,7 +26,6 @@ from pyscf.pbc.df import aft as aft_cpu
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.cupy_helper import (
     contract, asarray, ndarray, transpose_sum, get_avail_mem, empty_aligned)
-from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.__config__ import props as gpu_specs
 from gpu4pyscf.gto.mole import RysIntEnvVars, _scale_sp_ctr_coeff
 from gpu4pyscf.pbc.df.int3c2e import (
@@ -44,8 +43,8 @@ from gpu4pyscf.pbc.tools.pbc import madelung, _Gv_wrap_around
 from gpu4pyscf.pbc.gto import int1e
 from gpu4pyscf.pbc.gto.cell import get_Gv_weights
 from gpu4pyscf.pbc.lib.kpts_helper import (
-    fft_matrix, kk_adapted_iter, conj_images_in_bvk_cell)
-from gpu4pyscf.pbc.tools.k2gamma import kpts_to_kmesh
+    fft_matrix, kk_adapted_iter, conj_kpts)
+from gpu4pyscf.pbc.lib.kpts_helper import kpts_to_bvkmesh
 from gpu4pyscf.pbc.df.rsdf_builder import estimate_ke_cutoff_for_omega, estimate_omega_for_ke_cutoff
 
 
@@ -112,7 +111,7 @@ def _get_ejk_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, j_factor=1., k_fac
     expLk_conj = expLk.conj()
     expLk_conjz = expLk_conj.view(np.float64).reshape(bvk_ncells,nkpts,2)
 
-    kpt_iters = kk_adapted_iter(int3c2e_opt.bvk_kmesh)
+    kpt_iters = kk_adapted_iter(int3c2e_opt.bvkmesh)
     kpt_iters = [(kp, kp_conj, cp.asarray(ki_idx, dtype=np.int32),
                   cp.asarray(kj_idx, dtype=np.int32))
                  for kp, kp_conj, ki_idx, kj_idx in kpt_iters]
@@ -121,7 +120,7 @@ def _get_ejk_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, j_factor=1., k_fac
     nkpts_uniq = len(uniq_kpts)
 
     conj_mapping = cp.asarray(
-        conj_images_in_bvk_cell(int3c2e_opt.bvk_kmesh), dtype=np.int32)
+        conj_kpts(int3c2e_opt.bvkmesh), dtype=np.int32)
 
     mem_free = get_avail_mem(exclude_memory_pool=True)
     batch_size = blksize = 0
@@ -191,7 +190,7 @@ def _get_ejk_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, j_factor=1., k_fac
     log.debug('Set 2c2e integrals precision %g', precision)
     rcut = _estimate_sr_2c2e_rcut(auxcell, int3c2e_opt.omega, precision)
     with lib.temporary_env(auxcell, rcut=rcut):
-        int2c2e_opt = Int2c2eOpt(auxcell, int3c2e_opt.bvk_kmesh)
+        int2c2e_opt = Int2c2eOpt(auxcell, int3c2e_opt.bvkmesh)
     j2c = int2c2e_opt.int2c2e(
         uniq_kpts, sort_output=False, omega=-int3c2e_opt.omega)
     if j2c.dtype == np.float64:
@@ -418,6 +417,7 @@ def _get_ejk_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, j_factor=1., k_fac
         compact_buf, work = _allocate(nao_pair*Gblksize*2, work)
         ao_buf, work = _allocate(ao_size*Gblksize*2, work)
         scratch1, scratch2 = _allocate(scratch1_size*Gblksize*2, work)
+        stream = cp.cuda.get_current_stream()
         for p0, p1 in lib.prange(0, ngrids, Gblksize):
             nGv = p1 - p0
             auxG = ft_ao.ft_ao(auxcell, Gk[:,p0:p1].reshape(-1,3), out=aux_buf).T
@@ -471,21 +471,22 @@ def _get_ejk_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, j_factor=1., k_fac
                     ctypes.cast(bas_ij_idx.data.ptr, ctypes.c_void_p),
                     ctypes.cast(bas_ij_img_idx.data.ptr, ctypes.c_void_p),
                     ctypes.cast(shl_pair_offsets.data.ptr, ctypes.c_void_p),
-                    ctypes.c_int(ft_opt.permutation_symmetry))
+                    ctypes.c_int(ft_opt.permutation_symmetry),
+                    ctypes.c_void_p(stream.ptr))
                 if err != 0:
                     raise RuntimeError('PBC_ft_aopair_ek_deriv failed')
                 LpqG = None
 
                 pqG_compressed = eval_ft(Gv[p0:p1] + kpts[kp], out=compact_buf)
                 dm_vG_compressed[diag_idx] *= .5
-                vG = einsum('pg,pg->g', pqG_compressed[:n_compact_pairs],
+                vG = cp.einsum('pg,pg->g', pqG_compressed[:n_compact_pairs],
                                dm_vG_compressed[:n_compact_pairs]).real
                 # LpqG already includes both exchanged orbital orientations.
-                sigma_G += einsum('g,xyg->xy', vG, wcoulG_LR1[j2c_idx,:,:,p0:p1])
+                sigma_G += cp.einsum('g,xyg->xy', vG, wcoulG_LR1[j2c_idx,:,:,p0:p1])
                 if separated_dd:
-                    vG = einsum('pg,pg->g', pqG_compressed[n_compact_pairs:],
+                    vG = cp.einsum('pg,pg->g', pqG_compressed[n_compact_pairs:],
                                    dm_vG_compressed[n_compact_pairs:]).real
-                    sigma_G += einsum('g,xyg->xy', vG, wcoulG_FR1[j2c_idx,:,:,p0:p1])
+                    sigma_G += cp.einsum('g,xyg->xy', vG, wcoulG_FR1[j2c_idx,:,:,p0:p1])
                 dm_vG = dm_ooG = dm_vG_compressed = tmp = None
 
                 # Auxiliary response uses the weighted compact and DD columns.
@@ -497,7 +498,7 @@ def _get_ejk_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, j_factor=1., k_fac
                 beta = 0
                 dm_auxG = ndarray((naux,nGv), dtype=np.complex128, buffer=density_buf)
                 if j_factor != 0 and kp == 0:
-                    rhoGz = einsum('kpqG,kqp->G', pqG, dm_sorted)
+                    rhoGz = cp.einsum('kpqG,kqp->G', pqG, dm_sorted)
                     cp.multiply(auxvec[:,None], rhoGz, out=dm_auxG)
                     beta = j_factor
                 # einsum('pqG,pi,qj,rij,Gx,rG->rx', pqG, c, c, dm_oo, 1j*Gv, conj(auxG))
@@ -513,8 +514,8 @@ def _get_ejk_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, j_factor=1., k_fac
                 # = -(ji|r)^{[0]} * metric * (r|G)^{[1]} (G|s)^{[0]} * metric * (ij|s)^{[0]}
                 dm_auxG1 = ndarray((naux,nGv), dtype=np.complex128, buffer=scratch1)
                 contract('sr,sG->rG', dm_aux[j2c_idx], auxG[:,j2c_idx], out=dm_auxG1)
-                vG = einsum('rg,rg->g', dm_auxG1, auxG_conj).real
-                sigma_G -= .5 * einsum('g,xyg->xy', vG, wcoulG_LR1[j2c_idx,:,:,p0:p1])
+                vG = cp.einsum('rg,rg->g', dm_auxG1, auxG_conj).real
+                sigma_G -= .5 * cp.einsum('g,xyg->xy', vG, wcoulG_LR1[j2c_idx,:,:,p0:p1])
                 dm_auxG1 *= wcoulG_LR0[j2c_idx,p0:p1]
                 dm_auxG -= dm_auxG1
                 dm_auxG = dm_auxG.view(np.float64)
@@ -525,7 +526,8 @@ def _get_ejk_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, j_factor=1., k_fac
                     null_ptr,
                     ctypes.cast(dm_auxG.data.ptr, ctypes.c_void_p),
                     ctypes.cast(GkT.data.ptr, ctypes.c_void_p),
-                    ctypes.byref(aux_ft_envs), ctypes.c_int(nGv))
+                    ctypes.byref(aux_ft_envs), ctypes.c_int(nGv),
+                    ctypes.c_void_p(stream.ptr))
                 if err != 0:
                     raise RuntimeError('ft_ao_deriv failed')
                 pqG = pqG_compressed = tmp = ijG = dm_auxG1 = dm_oo_k = None
@@ -653,7 +655,8 @@ def _get_ejk_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, j_factor=1., k_fac
                 ctypes.c_int(naux_in_batch),
                 ctypes.cast(diffuse_exps.data.ptr, ctypes.c_void_p),
                 ctypes.cast(diffuse_coefs.data.ptr, ctypes.c_void_p),
-                ctypes.c_float(log_cutoff))
+                ctypes.c_float(log_cutoff),
+                ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
             if err != 0:
                 raise RuntimeError('PBCsr_ejk_int3c2e_deriv failed')
         ejk_sigma += ejk_sigma_sr * 2
@@ -664,18 +667,18 @@ def _get_ejk_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, j_factor=1., k_fac
     if (exxdiv == 'ewald' and
         (cell.dimension == 3 or
          (cell.dimension == 2 and cell.low_dim_ft_type != 'inf_vacuum'))):
-        bvk_kmesh = int3c2e_opt.bvk_kmesh
-        s0 = int1e.int1e_ovlp(cell, kpts, bvk_kmesh)
+        bvkmesh = int3c2e_opt.bvkmesh
+        s0 = int1e.int1e_ovlp(cell, kpts, bvkmesh)
         k_dm = contract('kpq,kqr->kpr', dm, s0)
         k_dm = contract('kpr,krs->kps', k_dm, dm)
         # The k_factor was previously scaled by 1/nkpts^2.
         k_factor *= nkpts**2
-        de_ewald = int1e.ovlp_derivatives(cell, k_dm, kpts, bvk_kmesh)
+        de_ewald = int1e.ovlp_derivatives(cell, k_dm, kpts, bvkmesh)
         exx_0, exx_1 = aft_jk._exxdiv_ewald_strain_deriv(cell.cell, kpts, -omega)
         de_ewald *= -.5 * k_factor * exx_0 / nkpts
         ejk_sigma += de_ewald
 
-        ek_G0 = float(einsum('kij,kji->', s0, k_dm).real.get()) / nkpts**2
+        ek_G0 = float(cp.einsum('kij,kji->', s0, k_dm).real.get()) / nkpts**2
         # *.5 for the factor 1/2 in Coulomb operator; second *.5 for J-K/2 in RHF
         ejk_sigma[-3:] -= k_factor * .5 * .5 * ek_G0 * exx_1
     return ejk_sigma
@@ -713,7 +716,7 @@ def _get_ej_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, omega=None,
         assert len(int3c2e_opt.bvkmesh_Ls) == len(kpts)
         nkpts = len(kpts)
         #:expLk = cp.exp(1j*asarray(int3c2e_opt.bvkmesh_Ls).dot(asarray(kpts).T))
-        expLk = fft_matrix(int3c2e_opt.bvk_kmesh)
+        expLk = fft_matrix(int3c2e_opt.bvkmesh)
         dm = contract('Lk,kpq->Lpq', expLk, dm)
         dm = cp.asarray(dm.real, order='C')
         dm *= 1./nkpts
@@ -794,7 +797,7 @@ def _get_ej_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, omega=None,
                 rhoGz = cp.zeros(nGv*2)
             else:
                 pqG = eval_ft(Gv[p0:p1], out=buf)
-                rhoGz = einsum('pG,p->G', pqG.view(np.float64), dm_tril)
+                rhoGz = cp.einsum('pG,p->G', pqG.view(np.float64), dm_tril)
             rhoG[p0:p1] = rhoGz.view(np.complex128)
 
             auxG = ft_ao.ft_ao(auxcell, Gv[p0:p1], out=buf).T
@@ -867,6 +870,7 @@ def _get_ej_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, omega=None,
             vG += vG_FR
         GvT = cp.asarray(Gv.T.ravel())
         ej_sigma_aux = cp.zeros([cell.natm+3, 3])
+        stream = cp.cuda.get_current_stream()
         err = libpbc.PBC_ft_ao_deriv(
             ctypes.cast(ej_sigma_aux[:-3].data.ptr, ctypes.c_void_p),
             ctypes.cast(ej_sigma_aux[-3:].data.ptr, ctypes.c_void_p),
@@ -874,7 +878,8 @@ def _get_ej_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, omega=None,
             ctypes.cast(vG.data.ptr, ctypes.c_void_p),
             ctypes.cast(GvT.data.ptr, ctypes.c_void_p),
             ctypes.byref(aux_ft_envs),
-            ctypes.c_int(ngrids))
+            ctypes.c_int(ngrids),
+            ctypes.c_void_p(stream.ptr))
         if err != 0:
             raise RuntimeError('ft_ao_deriv failed')
 
@@ -895,7 +900,8 @@ def _get_ej_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, omega=None,
                 ctypes.cast(bas_ij_idx.data.ptr, ctypes.c_void_p),
                 ctypes.cast(bas_ij_img_idx.data.ptr, ctypes.c_void_p),
                 ctypes.cast(shl_pair_offsets.data.ptr, ctypes.c_void_p),
-                ctypes.c_int(ft_opt.permutation_symmetry))
+                ctypes.c_int(ft_opt.permutation_symmetry),
+                ctypes.c_void_p(stream.ptr))
             if err != 0:
                 raise RuntimeError('PBC_ft_aopair_ej_deriv failed')
 
@@ -914,18 +920,19 @@ def _get_ej_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, omega=None,
                 ctypes.cast(dd_bas_ij_idx.data.ptr, ctypes.c_void_p),
                 ctypes.cast(dd_bas_ij_img_idx.data.ptr, ctypes.c_void_p),
                 ctypes.cast(dd_shl_pair_offsets.data.ptr, ctypes.c_void_p),
-                ctypes.c_int(ft_opt.permutation_symmetry))
+                ctypes.c_int(ft_opt.permutation_symmetry),
+                ctypes.c_void_p(stream.ptr))
             if err != 0:
                 raise RuntimeError('PBC_ft_aopair_ej_deriv failed')
 
         ej_sigma_lr *= 2 # due to i>=j symmetry in CUDA kernel
         ej_sigma_lr += ej_sigma_aux
-        ej_sigma_lr[-3:] += einsum(
+        ej_sigma_lr[-3:] += cp.einsum(
             'g,g,xyg->xy', rho_auxG, rhoG_LR.conj(), wcoulG_LR1).real
         if separated_dd:
-            ej_sigma_lr[-3:] += einsum(
+            ej_sigma_lr[-3:] += cp.einsum(
                 'g,g,xyg->xy', rho_auxG, rhoG_FR.conj(), wcoulG_FR1).real
-        ej_sigma_lr[-3:] -= .5 * einsum(
+        ej_sigma_lr[-3:] -= .5 * cp.einsum(
             'g,g,xyg->xy', rho_auxG, rho_auxG.conj(), wcoulG_LR1).real
         return ej_sigma_lr
 
@@ -991,7 +998,8 @@ def _get_ej_derivatives(int3c2e_opt, dm, kpts=None, hermi=0, omega=None,
             ctypes.c_int(naux),
             ctypes.cast(diffuse_exps.data.ptr, ctypes.c_void_p),
             ctypes.cast(diffuse_coefs.data.ptr, ctypes.c_void_p),
-            ctypes.c_float(log_cutoff))
+            ctypes.c_float(log_cutoff),
+            ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
         if err != 0:
             raise RuntimeError('PBCsr_ejk_int3c2e_deriv failed')
         ej_sigma += ej_sigma_sr * 2
@@ -1063,9 +1071,9 @@ def get_pp_loc_part1_grad(cell, dm, kpts=None, hermi=0, with_pseudo=True, verbos
     if is_single_kpt:
         kpts = kpts.reshape(1, 3)
     if is_gamma_point:
-        bvk_kmesh = np.ones(3, dtype=int)
+        bvkmesh = np.ones(3, dtype=int)
     else:
-        bvk_kmesh = kpts_to_kmesh(cell, kpts, bound_by_supmol=True)
+        bvkmesh = kpts_to_bvkmesh(cell, kpts, bound_by_supmol=True)
 
     # Guess range-separation parameter based on system size
     omega = 0.4
@@ -1081,7 +1089,7 @@ def get_pp_loc_part1_grad(cell, dm, kpts=None, hermi=0, with_pseudo=True, verbos
               omega, ke_cutoff, mesh)
 
     fakenuc = aft_cpu._fake_nuc(cell, with_pseudo=with_pseudo)
-    int3c2e_opt = SRInt3c2eOpt(cell, fakenuc, omega=-omega, bvk_kmesh=bvk_kmesh).build()
+    int3c2e_opt = SRInt3c2eOpt(cell, fakenuc, omega=-omega, bvkmesh=bvkmesh).build()
     charges = -cp.asarray(cell.atom_charges(), dtype=np.float64)
 
     cell = int3c2e_opt.cell
@@ -1100,7 +1108,7 @@ def get_pp_loc_part1_grad(cell, dm, kpts=None, hermi=0, with_pseudo=True, verbos
         assert len(int3c2e_opt.bvkmesh_Ls) == len(kpts)
         nkpts = len(kpts)
         #:expLk = cp.exp(1j*asarray(int3c2e_opt.bvkmesh_Ls).dot(asarray(kpts).T))
-        expLk = fft_matrix(int3c2e_opt.bvk_kmesh)
+        expLk = fft_matrix(int3c2e_opt.bvkmesh)
         dm = contract('Lk,kpq->Lpq', expLk, dm)
         dm = cp.asarray(dm.real, order='C')
         dm *= 1./nkpts
@@ -1150,7 +1158,7 @@ def get_pp_loc_part1_grad(cell, dm, kpts=None, hermi=0, with_pseudo=True, verbos
         nGv = p1 - p0
         # conj((r|G)^{[0]}) (ij|G)^{[0]}
         pqG = eval_ft(Gv[p0:p1], out=buf)
-        rhoGz = einsum('pG,p->G', pqG.view(np.float64), dm_tril)
+        rhoGz = cp.einsum('pG,p->G', pqG.view(np.float64), dm_tril)
         rhoG[p0:p1] = rhoGz.view(np.complex128)
 
     aft_envs = ft_opt.aft_envs
@@ -1171,13 +1179,15 @@ def get_pp_loc_part1_grad(cell, dm, kpts=None, hermi=0, with_pseudo=True, verbos
     aux_ft_envs = RysIntEnvVars.new(
         auxcell.natm, auxcell.nbas, auxcell._atm, auxcell._bas,
         _scale_sp_ctr_coeff(auxcell), auxcell.ao_loc)
+    stream = cp.cuda.get_current_stream()
     err = libpbc.PBC_ft_ao_deriv(
         ctypes.cast(ej_sigma_aux[:-3].data.ptr, ctypes.c_void_p),
         ctypes.cast(ej_sigma_aux[-3:].data.ptr, ctypes.c_void_p),
         ctypes.cast(charges.data.ptr, ctypes.c_void_p),
         ctypes.cast(vG.data.ptr, ctypes.c_void_p),
         ctypes.cast(GvT.data.ptr, ctypes.c_void_p),
-        ctypes.byref(aux_ft_envs), ctypes.c_int(ngrids))
+        ctypes.byref(aux_ft_envs), ctypes.c_int(ngrids),
+        ctypes.c_void_p(stream.ptr))
     if err != 0:
         raise RuntimeError('ft_ao_deriv failed')
 
@@ -1200,13 +1210,14 @@ def get_pp_loc_part1_grad(cell, dm, kpts=None, hermi=0, with_pseudo=True, verbos
         ctypes.cast(bas_ij_idx.data.ptr, ctypes.c_void_p),
         ctypes.cast(bas_ij_img_idx.data.ptr, ctypes.c_void_p),
         ctypes.cast(shl_pair_offsets.data.ptr, ctypes.c_void_p),
-        ctypes.c_int(ft_opt.permutation_symmetry))
+        ctypes.c_int(ft_opt.permutation_symmetry),
+        ctypes.c_void_p(stream.ptr))
     if err != 0:
         raise RuntimeError('PBC_ft_aopair_ej_deriv failed')
 
     ej_sigma_lr *= 2
     ej_sigma_lr += ej_sigma_aux
-    ej_sigma_lr[-3:] += einsum(
+    ej_sigma_lr[-3:] += cp.einsum(
         'g,g,xyg->xy', rho_nucG, rhoG.conj(), wcoulG_LR1).real
     ej_sigma_lr[-3:] -= cp.eye(3) * (rhoG[0] * pp_G0_term).real
 
@@ -1269,7 +1280,8 @@ def get_pp_loc_part1_grad(cell, dm, kpts=None, hermi=0, with_pseudo=True, verbos
         ctypes.c_int(naux),
         ctypes.cast(diffuse_exps.data.ptr, ctypes.c_void_p),
         ctypes.cast(diffuse_coefs.data.ptr, ctypes.c_void_p),
-        ctypes.c_float(log_cutoff))
+        ctypes.c_float(log_cutoff),
+        ctypes.c_void_p(stream.ptr))
     if err != 0:
         raise RuntimeError('PBCsr_ejk_int3c2e_deriv failed')
     ej_sigma += ej_sigma_sr * 2

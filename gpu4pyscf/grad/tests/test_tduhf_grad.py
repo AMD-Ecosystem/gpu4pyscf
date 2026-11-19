@@ -23,7 +23,6 @@ from gpu4pyscf import scf as gpu_scf
 from gpu4pyscf.lib.multi_gpu import num_devices
 from gpu4pyscf.nac.finite_diff import diagonalize_u as diagonalize
 from gpu4pyscf.nac.finite_diff import diagonalize_tda_u as diagonalize_tda
-from gpu4pyscf.lib.cupy_helper import einsum
 
 atom = """
 O       0.0000000000     0.0000000000     0.0000000000
@@ -236,23 +235,25 @@ class KnownValues(unittest.TestCase):
             unit='B',)
         mf = mol.UHF().to_gpu()
         nao = mol.nao
-        cp.random.seed(4)
-        c = cp.random.rand(2, nao, nao) - .5
+        # Backend-independent input: np.random (MT19937) is identical on
+        # every host, unlike cp.random (cuRAND on CUDA, oneMKL on SYCL).
+        np.random.seed(4)
+        c = cp.asarray(np.random.rand(2, nao, nao)) - .5
         s = mf.get_ovlp()
-        diag = einsum('npi,pq,nqi->ni', c, s, c)
+        diag = cp.einsum('npi,pq,nqi->ni', c, s, c)
         mf.mo_coeff = c / diag[:,None,:]**.5
         mf.mo_energy = cp.stack([cp.arange(nao)*3., cp.arange(nao)*3.])
         mf.mo_occ = cp.zeros((2, nao))
         nocc = 5
         nvir = nao - nocc
         mf.mo_occ[:,:nocc] = 2
-        x_y = cp.random.rand(2, 2, nocc, nvir) - .5
+        x_y = cp.asarray(np.random.rand(2, 2, nocc, nvir)) - .5
         x_y /= cp.linalg.norm(x_y)
         td_grad = mf.TDHF().Gradients()
         td_grad.cphf_max_cycle = 0
         td_grad.cphf_conv_tol = 1e9
         dat = td_grad.grad_elec(x_y, singlet=True)
-        self.assertAlmostEqual (lib.fp(dat), -14.006578651492646, 10)
+        self.assertAlmostEqual (lib.fp(dat), -6.969952595543902, 10)
 
 if __name__ == "__main__":
     print("Full Tests for TD-UHF Gradient")

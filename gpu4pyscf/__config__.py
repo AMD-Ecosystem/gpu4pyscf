@@ -32,20 +32,16 @@ if props['totalGlobalMem'] < 16 * GB:
 mem_fraction = 0.9
 cupy.get_default_memory_pool().set_limit(fraction=mem_fraction)
 
-# sharedMemPerBlockOptin is a CUDA-only device attribute; CuPy-ROCm does not
-# expose it. Fall back to sharedMemPerBlock (the per-block LDS limit, 64 KB on
-# AMD GPUs) when it is absent so the opt-in branch is skipped on ROCm. On CUDA
-# the key is present and behaviour is unchanged.
-if props.get('sharedMemPerBlockOptin', 0) > 65536:
-    shm_size = props['sharedMemPerBlockOptin']
+# `sharedMemPerBlockOptin` is a CUDA opt-in attribute for requesting more than
+# the default dynamic shared memory; it is not reported by HIP/ROCm. Fall back to
+# the regular shared-memory (LDS) size when it is absent.
+shared_mem_optin = props.get('sharedMemPerBlockOptin', 0)
+if shared_mem_optin > 65536:
+    shm_size = shared_mem_optin
     # Resever space for system use
     shm_size -= 2048
 else:
     shm_size = props['sharedMemPerBlock']
-    if cupy.cuda.runtime.is_hip:
-        # The kernels' static __shared__ variables count against the same
-        # 64 KB as the dynamic buffer sized from shm_size.
-        shm_size -= 1024
 
 # Check P2P data transfer is available
 _p2p_access = True
@@ -58,3 +54,5 @@ if num_devices > 1:
 
 # Overwrite the above settings using the global pyscf configs
 from pyscf.__config__ import * # noqa
+
+del shared_mem_optin

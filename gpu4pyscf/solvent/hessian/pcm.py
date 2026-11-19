@@ -33,7 +33,7 @@ from gpu4pyscf.gto import int3c1e
 from gpu4pyscf.gto.int3c1e import int1e_grids
 from gpu4pyscf.hessian.rhf import HessianBase, _ao2mo
 from gpu4pyscf.lib import utils
-from gpu4pyscf.lib.cupy_helper import contract, get_avail_mem, einsum
+from gpu4pyscf.lib.cupy_helper import contract, get_avail_mem
 
 def gradgrad_switch_h(x):
     ''' 2nd derivative of h(x) '''
@@ -175,7 +175,6 @@ def get_d2Sii(surface, dF, d2F, stream=None):
     if stream is None:
         stream = cupy.cuda.get_current_stream()
     err = libsolvent.pcm_d2f_to_d2sii(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         ctypes.cast(switch_fun.data.ptr, ctypes.c_void_p),
         ctypes.cast(dF.data.ptr, ctypes.c_void_p),
         ctypes.cast(d2F.data.ptr, ctypes.c_void_p),
@@ -183,6 +182,7 @@ def get_d2Sii(surface, dF, d2F, stream=None):
         ctypes.cast(d2Sii.data.ptr, ctypes.c_void_p),
         ctypes.c_int(natm),
         ctypes.c_int(ngrids),
+        ctypes.cast(stream.ptr, ctypes.c_void_p),
     )
     if err != 0:
         raise RuntimeError('Failed in converting PCM d2F to d2Sii.')
@@ -297,7 +297,7 @@ def contract_d2S_diagonal(surface, dF, prefactor, surface_discretization_method 
 
         dF_prefactor = d2F_prefactor / Fi
         dFi = dF[:,:,p0:p1]
-        d2Sii += 2 * einsum("Adq,BDq->ABdD", dFi * dF_prefactor, dFi)
+        d2Sii += 2 * cupy.einsum("Adq,BDq->ABdD", dFi * dF_prefactor, dFi)
 
         del d2F_prefactor, dF_prefactor
 
@@ -322,12 +322,12 @@ def get_d2D_d2S(surface, with_S=True, with_D=False, stream=None):
     if stream is None:
         stream = cupy.cuda.get_current_stream()
     err = libsolvent.pcm_d2d_d2s(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         d2D_ptr, d2S_ptr,
         ctypes.cast(grid_coords.data.ptr, ctypes.c_void_p),
         ctypes.cast(norm_vec.data.ptr, ctypes.c_void_p),
         ctypes.cast(charge_exp.data.ptr, ctypes.c_void_p),
-        ctypes.c_int(n)
+        ctypes.c_int(n),
+        ctypes.cast(stream.ptr, ctypes.c_void_p)
     )
     if err != 0:
         raise RuntimeError('Failed in generating PCM d2D and d2S matrices.')
@@ -346,7 +346,6 @@ def contract_d2S_offdiagonal(surface, left_vector, right_vector, gridslice, stre
     if stream is None:
         stream = cupy.cuda.get_current_stream()
     err = libsolvent.pcm_contract_d2s_offdiagonal(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         ctypes.cast(sandwiched_d2S.data.ptr, ctypes.c_void_p),
         ctypes.cast(left_vector.data.ptr, ctypes.c_void_p),
         ctypes.cast(right_vector.data.ptr, ctypes.c_void_p),
@@ -355,6 +354,7 @@ def contract_d2S_offdiagonal(surface, left_vector, right_vector, gridslice, stre
         ctypes.cast(charge_exp.data.ptr, ctypes.c_void_p),
         ctypes.c_int(n),
         ctypes.c_int(natm),
+        ctypes.cast(stream.ptr, ctypes.c_void_p),
     )
     if err != 0:
         raise RuntimeError('Failed in left_multiply_dS_offdiagonal')
@@ -443,9 +443,9 @@ def analytical_hess_nuc(pcmobj, dm, verbose=None):
     d2e_from_dIdq = cupy.zeros([mol.natm, mol.natm, 3, 3])
     for i_atom in range(mol.natm):
         for i_xyz in range(3):
-            dv_g = einsum('g,xng->nx', dqdx[i_atom, i_xyz, :], v_ng_ip1_on_nuclei)
+            dv_g = cupy.einsum('g,xng->nx', dqdx[i_atom, i_xyz, :], v_ng_ip1_on_nuclei)
             de_grad_nuc = -cupy.einsum('nx,n->nx', dv_g, atom_charges)
-            dv_g = einsum('n,xgn->gx', atom_charges, v_ng_ip1_on_grid)
+            dv_g = cupy.einsum('n,xgn->gx', atom_charges, v_ng_ip1_on_grid)
             dv_g = cupy.einsum('gx,g->gx', dv_g, dqdx[i_atom, i_xyz, :])
             de_grad_nuc -= cupy.asarray([cupy.sum(dv_g[p0:p1], axis=0) for p0,p1 in gridslice])
 
@@ -554,7 +554,7 @@ def analytical_hess_qv(pcmobj, dm, verbose=None):
         for i_xyz in range(3):
             dq  = rho_q_dq * dqdx[i_atom, i_xyz, :]
             dq = cupy.asarray([cupy.sum(dq[:,p0:p1], axis=1) for p0,p1 in gridslice])
-            dvj = 2.0 * einsum("Adq,q->Ad", rho_q_dorbital, dqdx[i_atom, i_xyz, :])
+            dvj = 2.0 * cupy.einsum("Adq,q->Ad", rho_q_dorbital, dqdx[i_atom, i_xyz, :])
 
             d2e_from_dIdq[i_atom, :, i_xyz, :] = dq + dvj
 
@@ -602,7 +602,6 @@ def get_dS_dot_q_lowmem(dSii, surface, q, atmlst, gridslice, stream = None):
             continue
 
         err = libsolvent.pcm_left_multiply_ds_one_atom(
-            ctypes.cast(stream.ptr, ctypes.c_void_p),
             ctypes.cast(qdS.data.ptr, ctypes.c_void_p),
             ctypes.cast(q.data.ptr, ctypes.c_void_p),
             ctypes.cast(grid_coords.data.ptr, ctypes.c_void_p),
@@ -610,6 +609,7 @@ def get_dS_dot_q_lowmem(dSii, surface, q, atmlst, gridslice, stream = None):
             ctypes.c_int(ngrids),
             ctypes.c_int(g0),
             ctypes.c_int(g1),
+            ctypes.cast(stream.ptr, ctypes.c_void_p),
         )
         if err != 0:
             raise RuntimeError('Failed in left_multiply_dS_offdiagonal_one_atom')

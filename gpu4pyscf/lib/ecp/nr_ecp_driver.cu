@@ -28,9 +28,6 @@
 #include "ecp_type2_ip.cu"
 #include "ecp_type1_ipip.cu"
 #include "ecp_type2_ipip.cu"
-#ifdef USE_HIP
-#include "ecp_type2_lowmem.cu"
-#endif
 
 extern "C" {
 int ECP_cart(double *gctr,
@@ -38,27 +35,27 @@ int ECP_cart(double *gctr,
             const int *tasks, const int ntasks,
             const int *ecpbas, const int *ecploc,
             const int *atm, const int *bas, const double *env,
-            const int li, const int lj, const int lc){
+            const int li, const int lj, const int lc, cudaStream_t stream){
     // one task per thread block
     dim3 threads(THREADS);
     dim3 blocks(ntasks);
     if (lc >= 0){
         int task_type = li * 100 + lj * 10 + lc;
         switch (task_type) {
-        case 0:  type2_cart<0,0,0><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 1:  type2_cart<0,0,1><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 2:  type2_cart<0,0,2><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 3:  type2_cart<0,0,3><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 10:  type2_cart<0,1,0><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 11:  type2_cart<0,1,1><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 12:  type2_cart<0,1,2><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 110: type2_cart<1,1,0><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 111: type2_cart<1,1,1><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 112: type2_cart<1,1,2><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 20:  type2_cart<0,2,0><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 21:  type2_cart<0,2,1><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 30:  type2_cart<0,3,0><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 120: type2_cart<1,2,0><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 0:  type2_cart<0,0,0><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 1:  type2_cart<0,0,1><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 2:  type2_cart<0,0,2><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 3:  type2_cart<0,0,3><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 10:  type2_cart<0,1,0><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 11:  type2_cart<0,1,1><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 12:  type2_cart<0,1,2><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 110: type2_cart<1,1,0><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 111: type2_cart<1,1,1><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 112: type2_cart<1,1,2><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 20:  type2_cart<0,2,0><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 21:  type2_cart<0,2,1><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 30:  type2_cart<0,3,0><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 120: type2_cart<1,2,0><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
 
         // General kernel
         default: {
@@ -79,7 +76,7 @@ int ECP_cart(double *gctr,
             int smem_size4 = lj1*nfj*ljc1; // angj
             int smem_size = smem_size0 + smem_size1 + smem_size2 + smem_size3 + smem_size4;
 
-            type2_cart<<<blocks, threads, smem_size*sizeof(double)>>>(
+            type2_cart_general<<<blocks, threads, smem_size*sizeof(double), stream>>>(
                 gctr,
                 li, lj, lc,
                 ao_loc, nao,
@@ -91,15 +88,15 @@ int ECP_cart(double *gctr,
         int task_type = li * 10 + lj;
         switch (task_type)
         {
-        case 0:  type1_cart<0,0><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 1:  type1_cart<0,1><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 11: type1_cart<1,1><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 2:  type1_cart<0,2><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 3:  type1_cart<0,3><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 12: type1_cart<1,2><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 4:  type1_cart<0,4><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 13: type1_cart<1,3><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 22: type1_cart<2,2><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 0:  type1_cart<0,0><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 1:  type1_cart<0,1><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 11: type1_cart<1,1><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 2:  type1_cart<0,2><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 3:  type1_cart<0,3><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 12: type1_cart<1,2><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 4:  type1_cart<0,4><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 13: type1_cart<1,3><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 22: type1_cart<2,2><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
         default: {
             const int lij1 = li+lj+1;
             const int lij3 = lij1*lij1*lij1;
@@ -107,7 +104,7 @@ int ECP_cart(double *gctr,
             int smem_size = 0;
             smem_size += lij3;      // rad_ang
             smem_size += lij1*lij1; // rad_all
-            type1_cart<<<blocks, threads, smem_size*sizeof(double)>>>(
+            type1_cart_general<<<blocks, threads, smem_size*sizeof(double), stream>>>(
                 gctr, li, lj,
                 ao_loc, nao,
                 tasks, ntasks,
@@ -129,22 +126,22 @@ int ECP_ip_cart(double *gctr,
             const int *tasks, const int ntasks,
             const int *ecpbas, const int *ecploc,
             const int *atm, const int *bas, const double *env,
-            const int li, const int lj, const int lc){
+            const int li, const int lj, const int lc, cudaStream_t stream){
     // one task per thread block
     dim3 threads(THREADS);
     dim3 blocks(ntasks);
     if (lc < 0){
         int task_type = li * 10 + lj;
         switch (task_type) {
-        case 0:  type1_cart_ip1<0,0><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 1:  type1_cart_ip1<0,1><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 11: type1_cart_ip1<1,1><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 2:  type1_cart_ip1<0,2><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 3:  type1_cart_ip1<0,3><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 12: type1_cart_ip1<1,2><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 4:  type1_cart_ip1<0,4><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 13: type1_cart_ip1<1,3><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 22: type1_cart_ip1<2,2><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 0:  type1_cart_ip1<0,0><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 1:  type1_cart_ip1<0,1><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 11: type1_cart_ip1<1,1><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 2:  type1_cart_ip1<0,2><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 3:  type1_cart_ip1<0,3><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 12: type1_cart_ip1<1,2><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 4:  type1_cart_ip1<0,4><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 13: type1_cart_ip1<1,3><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 22: type1_cart_ip1<2,2><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
         default: {
             const int lij1 = li+lj+2;
             const int lij3 = lij1*lij1*lij1;
@@ -152,7 +149,7 @@ int ECP_ip_cart(double *gctr,
             int smem_size = 0;
             smem_size += lij3;      // rad_ang
             smem_size += lij1*lij1; // rad_all
-            type1_cart_ip1_general<<<blocks, threads, smem_size*sizeof(double)>>>(
+            type1_cart_ip1_general<<<blocks, threads, smem_size*sizeof(double), stream>>>(
                 gctr, li, lj,
                 ao_loc, nao,
                 tasks, ntasks,
@@ -162,20 +159,20 @@ int ECP_ip_cart(double *gctr,
     } else {
         int task_type = li * 100 + lj * 10 + lc;
         switch (task_type) {
-        case 0:  type2_cart_ip1<0,0,0><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 1:  type2_cart_ip1<0,0,1><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 2:  type2_cart_ip1<0,0,2><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 3:  type2_cart_ip1<0,0,3><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 10:  type2_cart_ip1<0,1,0><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 11:  type2_cart_ip1<0,1,1><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 12:  type2_cart_ip1<0,1,2><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 110: type2_cart_ip1<1,1,0><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 111: type2_cart_ip1<1,1,1><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 112: type2_cart_ip1<1,1,2><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 20:  type2_cart_ip1<0,2,0><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 21:  type2_cart_ip1<0,2,1><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 30:  type2_cart_ip1<0,3,0><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
-        case 120: type2_cart_ip1<1,2,0><<<blocks, threads>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 0:  type2_cart_ip1<0,0,0><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 1:  type2_cart_ip1<0,0,1><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 2:  type2_cart_ip1<0,0,2><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 3:  type2_cart_ip1<0,0,3><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 10:  type2_cart_ip1<0,1,0><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 11:  type2_cart_ip1<0,1,1><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 12:  type2_cart_ip1<0,1,2><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 110: type2_cart_ip1<1,1,0><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 111: type2_cart_ip1<1,1,1><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 112: type2_cart_ip1<1,1,2><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 20:  type2_cart_ip1<0,2,0><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 21:  type2_cart_ip1<0,2,1><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 30:  type2_cart_ip1<0,3,0><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
+        case 120: type2_cart_ip1<1,2,0><<<blocks, threads, 0, stream>>>(gctr, ao_loc, nao, tasks, ntasks, ecpbas, ecploc, atm, bas, env); break;
 
         // General kernel
         default: {
@@ -197,15 +194,6 @@ int ECP_ip_cart(double *gctr,
             int smem_size4 = lj1*ljc1*nfj; // angj
 
             int dynamic_smem_size = smem_size0 + smem_size1 + smem_size2 + smem_size3 + smem_size4;
-#ifdef USE_HIP
-            if (!type2_fits_shared_memory((const void *)type2_cart_ip1_general,
-                                          dynamic_smem_size*sizeof(double))) {
-                return type2_launch_lowmem((const void *)type2_cart_ip1_lowmem, __func__,
-                    gctr, li, lj, lc, li+1, lj, 0,
-                    ao_loc, nao, tasks, ntasks,
-                    ecpbas, ecploc, atm, bas, env);
-            }
-#endif
             cudaError_t err = cudaFuncSetAttribute(
                 type2_cart_ip1_general,
                 cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -216,7 +204,7 @@ int ECP_ip_cart(double *gctr,
                 return 1;
             }
 
-            type2_cart_ip1_general<<<blocks, threads, dynamic_smem_size*sizeof(double)>>>(
+            type2_cart_ip1_general<<<blocks, threads, dynamic_smem_size*sizeof(double), stream>>>(
                 gctr, li, lj, lc,
                 ao_loc, nao,
                 tasks, ntasks,
@@ -237,7 +225,7 @@ int ECP_ipipv_cart(double *gctr,
             const int *tasks, const int ntasks,
             const int *ecpbas, const int *ecploc,
             const int *atm, const int *bas, const double *env,
-            const int li, const int lj, const int lc){
+            const int li, const int lj, const int lc, cudaStream_t stream){
     // one task per thread block
     dim3 threads(THREADS);
     dim3 blocks(ntasks);
@@ -249,7 +237,7 @@ int ECP_ipipv_cart(double *gctr,
         int smem_size = 0;
         smem_size += lij3;      // rad_ang
         smem_size += lij1*lij1; // rad_all
-        type1_cart_ipipv<<<blocks, threads, smem_size*sizeof(double)>>>(
+        type1_cart_ipipv<<<blocks, threads, smem_size*sizeof(double), stream>>>(
             gctr, li, lj,
             ao_loc, nao,
             tasks, ntasks,
@@ -281,15 +269,6 @@ int ECP_ipipv_cart(double *gctr,
         int dynamic_smem_size = smem_size0 + smem_size1 + smem_size2 + smem_size3 + smem_size4;
         dynamic_smem_size = max(dynamic_smem_size, 3*NF1_MAX*NF0_MAX);
         //int total_smem_size = static_smem_size + dynamic_smem_size;
-#ifdef USE_HIP
-        if (!type2_fits_shared_memory((const void *)type2_cart_ipipv,
-                                      dynamic_smem_size*sizeof(double))) {
-            return type2_launch_lowmem((const void *)type2_cart_ipipv_lowmem, __func__,
-                gctr, li, lj, lc, li+2, lj, 3*NF1_MAX*NF0_MAX,
-                ao_loc, nao, tasks, ntasks,
-                ecpbas, ecploc, atm, bas, env);
-        }
-#endif
 
         cudaError_t err = cudaFuncSetAttribute(type2_cart_ipipv,
                                          cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -299,7 +278,7 @@ int ECP_ipipv_cart(double *gctr,
             return 1;
         }
 
-        type2_cart_ipipv<<<blocks, threads, dynamic_smem_size*sizeof(double)>>>(
+        type2_cart_ipipv<<<blocks, threads, dynamic_smem_size*sizeof(double), stream>>>(
             gctr, li, lj, lc,
             ao_loc, nao,
             tasks, ntasks,
@@ -320,7 +299,7 @@ int ECP_ipvip_cart(double *gctr,
             const int *tasks, const int ntasks,
             const int *ecpbas, const int *ecploc,
             const int *atm, const int *bas, const double *env,
-            const int li, const int lj, const int lc){
+            const int li, const int lj, const int lc, cudaStream_t stream){
     // one task per thread block
     dim3 threads(THREADS);
     dim3 blocks(ntasks);
@@ -332,7 +311,7 @@ int ECP_ipvip_cart(double *gctr,
         int smem_size = 0;
         smem_size += lij3;      // rad_ang
         smem_size += lij1*lij1; // rad_all
-        type1_cart_ipvip<<<blocks, threads, smem_size*sizeof(double)>>>(
+        type1_cart_ipvip<<<blocks, threads, smem_size*sizeof(double), stream>>>(
             gctr, li, lj,
             ao_loc, nao,
             tasks, ntasks,
@@ -361,15 +340,6 @@ int ECP_ipvip_cart(double *gctr,
         //int static_smem_size = NF1_MAX*NF1_MAX;
         int dynamic_smem_size = smem_size0 + smem_size1 + smem_size2 + smem_size3 + smem_size4;
         dynamic_smem_size = max(dynamic_smem_size, 3*NF0_MAX*NF1_MAX);
-#ifdef USE_HIP
-        if (!type2_fits_shared_memory((const void *)type2_cart_ipvip,
-                                      dynamic_smem_size*sizeof(double))) {
-            return type2_launch_lowmem((const void *)type2_cart_ipvip_lowmem, __func__,
-                gctr, li, lj, lc, li+1, lj+1, 3*NF0_MAX*NF1_MAX,
-                ao_loc, nao, tasks, ntasks,
-                ecpbas, ecploc, atm, bas, env);
-        }
-#endif
 
         //int total_smem_size = static_smem_size + dynamic_smem_size;
         cudaError_t err = cudaFuncSetAttribute(
@@ -381,7 +351,7 @@ int ECP_ipvip_cart(double *gctr,
             return 1;
         }
 
-        type2_cart_ipvip<<<blocks, threads, dynamic_smem_size*sizeof(double)>>>(
+        type2_cart_ipvip<<<blocks, threads, dynamic_smem_size*sizeof(double), stream>>>(
             gctr, li, lj, lc,
             ao_loc, nao,
             tasks, ntasks,

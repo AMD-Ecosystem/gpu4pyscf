@@ -16,13 +16,15 @@ import unittest
 import numpy as np
 import cupy as cp
 import pyscf
+from pyscf.pbc import gto as pgto
+from pyscf.pbc.lib.kpts import KPoints
 from pyscf import lib
 from pyscf.pbc.df import rsdf_builder
-from gpu4pyscf.pbc.df import int3c2e
+from gpu4pyscf.pbc.df import ft_ao, int2c2e, int3c2e
 from gpu4pyscf.gto.mole import SortedCell
 from gpu4pyscf.pbc.df.int3c2e import sr_aux_e2, fill_triu_bvk
 from gpu4pyscf.pbc.df.int2c2e import sr_int2c2e
-from gpu4pyscf.lib.cupy_helper import contract, einsum
+from gpu4pyscf.lib.cupy_helper import contract
 from gpu4pyscf.pbc.lib.kpts_helper import conj_images_in_bvk_cell
 
 
@@ -92,6 +94,28 @@ def test_int3c2e_kpoints():
     int3c = df.gen_int3c_kernel('int3c2e', aosym='s1', return_complex=True)
     ref = int3c().reshape(dat.shape)
     assert abs(dat - ref).max() < 1e-8
+
+def test_int3c2e_off_gamma():
+    cell = pyscf.M(
+        atom='He .2 .3 .4; He 1.2 1.5 1.8',
+        a=np.diag([5., 5.5, 6.]), unit='Bohr',
+        basis=[[0, [1., 1.]], [1, [.6, 1.]]],
+        precision=1e-10, verbose=0)
+    auxcell = cell.copy()
+    auxcell.basis = [[0, [1.1, 1.]], [1, [.7, 1.]]]
+    auxcell.build()
+    kpts = cell.make_kpts([2, 3, 1], with_gamma_point=False)
+    nkpts = len(kpts)
+    omega = -.5
+    dat = sr_aux_e2(cell, auxcell, omega, kpts).get()
+    builder = rsdf_builder._RSGDFBuilder(cell, auxcell, kpts).build(omega=abs(omega))
+    kernel = builder.gen_int3c_kernel('int3c2e', aosym='s1', return_complex=True)
+    ref = kernel().reshape(nkpts, nkpts, cell.nao, cell.nao, auxcell.nao)
+    np.testing.assert_allclose(dat, ref, atol=1e-8, rtol=0)
+
+    dat_j = sr_aux_e2(cell, auxcell, omega, kpts, j_only=True).get()
+    diag_idx = np.diag_indices(nkpts)
+    np.testing.assert_allclose(dat_j, ref[diag_idx], atol=1e-8, rtol=0)
 
 def test_minor_diffused_basis():
     cell = pyscf.M(
@@ -191,7 +215,7 @@ def test_sr_int2c2e():
         ref = auxcell_sr.pbc_intor('int2c2e', hermi=1, kpts=kpts)
     assert abs(dat - ref[0]).max() < 1e-10
 
-    dat = sr_int2c2e(cell, -omega, kpts=kpts, bvk_kmesh=kmesh).get()
+    dat = sr_int2c2e(cell, -omega, kpts=kpts, bvkmesh=kmesh).get()
     assert abs(dat - ref).max() < 1e-10
 
     cell = cell.copy()
@@ -223,7 +247,7 @@ C    D
         ref = auxcell_sr.pbc_intor('int2c2e', hermi=1, kpts=kpts)
     assert abs(dat - ref[0]).max() < 1e-10
 
-    dat = sr_int2c2e(cell, -omega, kpts=kpts, bvk_kmesh=kmesh).get()
+    dat = sr_int2c2e(cell, -omega, kpts=kpts, bvkmesh=kmesh).get()
     assert abs(dat - ref).max() < 1e-10
 
 def test_contract_dm_gamma_point():
@@ -268,14 +292,22 @@ C    D
     jaux = opt.contract_dm(opt.cell.apply_C_mat_CT(dm))
 
     j3c = sr_aux_e2(cell, auxcell, omega)
-    ref = einsum('pqr,qp->r', j3c, dm)
+    ref = cp.einsum('pqr,qp->r', j3c, dm)
     assert abs(jaux - ref).max() < 1e-9
 
     np.random.seed(9)
     auxvec = cp.asarray(np.random.rand(auxcell.nao))
     vj = opt.contract_auxvec(opt.auxcell.apply_C_dot(auxvec))
-    ref = einsum('pqr,r->pq', j3c, auxvec)
+    ref = cp.einsum('pqr,r->pq', j3c, auxvec)
+    assert vj.shape == ref.shape
     assert abs(vj - ref).max() < 1e-10
+
+    vj_batch = opt.contract_auxvec(opt.auxcell.apply_C_dot(auxvec), np.zeros((1, 3)))
+    vj_single = opt.contract_auxvec(opt.auxcell.apply_C_dot(auxvec), np.zeros(3))
+    assert vj_batch.shape == (1,) + ref.shape
+    assert vj_single.shape == ref.shape
+    assert abs(vj_batch - ref).max() < 1e-10
+    assert abs(vj_single - ref).max() < 1e-10
 
 def test_contract_dm_kpts():
     cell = pyscf.M(
@@ -319,13 +351,13 @@ C    D
     jaux = opt.contract_dm(opt.cell.apply_C_mat_CT(dm), kpts=kpts)
 
     j3c = sr_aux_e2(cell, auxcell, omega, kpts, kmesh, j_only=True)
-    ref = einsum('kpqr,kqp->r', j3c, dm) / nkpts
+    ref = cp.einsum('kpqr,kqp->r', j3c, dm) / nkpts
     assert abs(jaux - ref).max() < 3e-10
 
     np.random.seed(9)
     auxvec = np.random.rand(auxcell.nao)
     vj = opt.contract_auxvec(opt.auxcell.apply_C_dot(auxvec), kpts=kpts)
-    ref = einsum('kpqr,r->kpq', j3c, cp.asarray(auxvec))  # auxvec is host data
+    ref = cp.einsum('kpqr,r->kpq', j3c, cp.asarray(auxvec))  # auxvec is host data
     assert abs(vj - ref).max() < 1e-10
 
 def test_int3c2e_batch_evaluation():
@@ -389,7 +421,7 @@ C    D
     batch_size = int(ref.shape[0] *.23)
     eval_j3c, batches = opt.int3c2e_evaluator(ao_pair_batch_size=batch_size)[:2]
     counts = int3c2e._count_ao_pairs(
-        opt.cell, batches, cell.cart, np.prod(opt.bvk_kmesh))
+        opt.cell, batches, cell.cart, np.prod(opt.bvkmesh))
     ao_pair_offsets = np.append(0, np.cumsum(counts))
     dat = cp.empty_like(ref)
     for i, (p0, p1) in enumerate(zip(ao_pair_offsets[:-1],
@@ -405,14 +437,14 @@ C    D
         dat[:,:,p0:p1] = eval_j3c(aux_batch_id=i)
     assert abs(dat - ref).max() < 2e-10
 
-    opt = int3c2e.SRInt3c2eOpt(cell, auxcell, omega, bvk_kmesh=[3,1,2]).build()
+    opt = int3c2e.SRInt3c2eOpt(cell, auxcell, omega, bvkmesh=[3,1,2]).build()
     eval_j3c = opt.int3c2e_evaluator()[0]
     ref = eval_j3c()
     batch_size = int(ref.shape[0] *.23)
 
     eval_j3c, batches = opt.int3c2e_evaluator(ao_pair_batch_size=batch_size)[:2]
     counts = int3c2e._count_ao_pairs(
-        opt.cell, batches, cell.cart, np.prod(opt.bvk_kmesh))
+        opt.cell, batches, cell.cart, np.prod(opt.bvkmesh))
     ao_pair_offsets = np.append(0, np.cumsum(counts))
     dat = cp.empty_like(ref)
     for i, (p0, p1) in enumerate(zip(ao_pair_offsets[:-1],
@@ -455,6 +487,82 @@ def test_int2c2e_strain_deriv_vs_finite_difference():
     disp = 1e-4
     for (i, j) in [(0, 0), (0, 1), (0, 2), (1, 0), (2, 2)]:
         cell1, cell2 = _finite_diff_cells(cell, i, j, disp=disp)
-        e1 = .5 * einsum('ij,ji->', dm, int2c2e.sr_int2c2e(cell1, omega))
-        e2 = .5 * einsum('ij,ji->', dm, int2c2e.sr_int2c2e(cell2, omega))
+        e1 = .5 * cp.einsum('ij,ji->', dm, int2c2e.sr_int2c2e(cell1, omega))
+        e2 = .5 * cp.einsum('ij,ji->', dm, int2c2e.sr_int2c2e(cell2, omega))
         assert abs(dat[i,j] - (e1-e2)/disp/2) < 1e-6
+
+def test_auxiliary_metric_kpoint_shapes():
+    cell = pyscf.M(atom='He .2 .3 .4', a=np.eye(3)*5, unit='Bohr',
+                     basis=[[0, [1., 1.]], [0, [.4, 1.]]], pseudo='gth-pade',
+                     mesh=[15]*3, precision=1e-8, verbose=0)
+    # The overlap-based default cutoff is too short for this diffuse metric.
+    cell.rcut = 30
+    refcell = cell.copy()
+    refcell.rcut = 50
+    refcell.precision = 1e-12
+    result = int2c2e.int2c2e(cell, kpts=None, omega=-.4)
+    assert result.shape == (cell.nao, cell.nao)
+    assert result.dtype == np.float64
+    with refcell.with_range_coulomb(-.4):
+        ref = refcell.pbc_intor('int2c2e', hermi=1, kpts=None)
+    assert abs(result.get() - ref).max() < 1e-7
+
+    kpts = np.zeros((1, 3))
+    result = int2c2e.int2c2e(cell, kpts=kpts, omega=-.4)
+    assert result.shape == (1, cell.nao, cell.nao)
+    with refcell.with_range_coulomb(-.4):
+        ref = np.asarray(refcell.pbc_intor('int2c2e', hermi=1, kpts=kpts))
+    assert abs(result.get() - ref).max() < 1e-7
+
+
+def test_contract_rhoG_with_kpts():
+    cell = pgto.M(atom='He .2 .3 .4', a=np.eye(3)*5, unit='Bohr',
+                    basis=[[0, [1., 1.]], [0, [.4, 1.]]], pseudo='gth-pade',
+                    mesh=[15]*3, precision=1e-8, verbose=0)
+    kpts = cell.make_kpts([3, 1, 1])
+    opt = ft_ao.FTOpt(cell, [3, 1, 1]).build()
+    Gv = cell.get_Gv([3]*3)
+    rhoG = cp.asarray(np.exp(-.3*np.einsum('gi,gi->g', Gv, Gv)),
+                      dtype=np.complex128)
+    args = (rhoG, Gv)
+    gamma = opt.contract_rhoG(*args)
+    gamma_batch = opt.contract_rhoG(*args, kpts=np.zeros((1, 3)))
+    single = opt.contract_rhoG(*args, kpts=kpts[1])
+    one = opt.contract_rhoG(*args, kpts=kpts[1:2])
+    batch = opt.contract_rhoG(*args, kpts=kpts)
+    sampling = opt.contract_rhoG(*args, kpts=KPoints(cell, kpts))
+    cp.testing.assert_allclose(sampling, batch, atol=1e-10, rtol=0)
+    assert gamma.shape == single.shape == (cell.nao, cell.nao)
+    assert gamma_batch.shape == one.shape == (1, cell.nao, cell.nao)
+    assert batch.shape == (3, cell.nao, cell.nao)
+    assert gamma.dtype == np.float64
+    assert single.dtype == one.dtype == batch.dtype == np.complex128
+    cp.testing.assert_allclose(gamma, gamma_batch[0], atol=1e-10, rtol=0)
+    cp.testing.assert_allclose(gamma, batch[0], atol=1e-10, rtol=0)
+    cp.testing.assert_allclose(single, one[0], atol=1e-10, rtol=0)
+    cp.testing.assert_allclose(single, batch[1], atol=1e-10, rtol=0)
+
+
+def test_contract_auxvec_with_kpts():
+    cell = pgto.M(atom='He .2 .3 .4', a=np.eye(3)*5, unit='Bohr',
+                    basis=[[0, [1., 1.]], [0, [.4, 1.]]], pseudo='gth-pade',
+                    mesh=[15]*3, precision=1e-8, verbose=0)
+    kpts = cell.make_kpts([3, 1, 1])
+    opt = int3c2e.SRInt3c2eOpt(cell, cell, omega=-.4, bvkmesh=[3, 1, 1]).build()
+    args = (cp.ones(opt.auxcell.nao),)
+    gamma = opt.contract_auxvec(*args)
+    gamma_batch = opt.contract_auxvec(*args, kpts=np.zeros((1, 3)))
+    single = opt.contract_auxvec(*args, kpts=kpts[1])
+    one = opt.contract_auxvec(*args, kpts=kpts[1:2])
+    batch = opt.contract_auxvec(*args, kpts=kpts)
+    sampling = opt.contract_auxvec(*args, kpts=KPoints(cell, kpts))
+    cp.testing.assert_allclose(sampling, batch, atol=1e-10, rtol=0)
+    assert gamma.shape == single.shape == (cell.nao, cell.nao)
+    assert gamma_batch.shape == one.shape == (1, cell.nao, cell.nao)
+    assert batch.shape == (3, cell.nao, cell.nao)
+    assert gamma.dtype == np.float64
+    assert single.dtype == one.dtype == batch.dtype == np.complex128
+    cp.testing.assert_allclose(gamma, gamma_batch[0], atol=1e-10, rtol=0)
+    cp.testing.assert_allclose(gamma, batch[0], atol=1e-10, rtol=0)
+    cp.testing.assert_allclose(single, one[0], atol=1e-10, rtol=0)
+    cp.testing.assert_allclose(single, batch[1], atol=1e-10, rtol=0)

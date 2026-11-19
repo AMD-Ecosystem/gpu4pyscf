@@ -17,15 +17,12 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include "gvhf-rys/vhf.cuh"
 #include "constant_objects.cuh"
+#include "gvhf-rys/vhf.cuh"
 #include "cartesian.cuh"
 #include "utils.cuh"
 
 #define TILE            4
-#define WARP_SIZE       32
 #define THREADS         64
 
 template <int LI, int LJ, int SLICE_SIZE_I, int SLICE_SIZE_J>
@@ -352,16 +349,16 @@ void eval_mgga_grad_kernel(double *grad, double *strain, double *dm,
         sigma[n*3+2] += grad_i[n] * zi + grad_j[n] * zj;
     }
 
-    for (int offset = 16; offset > 0; offset >>= 1) {
+    for (int offset = MGRID_SUBGROUP_SIZE/2; offset > 0; offset >>= 1) {
         for (int n = 0; n < 3; ++n) {
-            grad_i[n] += __shfl_down_sync(0xffffffff, grad_i[n], offset);
-            grad_j[n] += __shfl_down_sync(0xffffffff, grad_j[n], offset);
+            grad_i[n] += __shfl_down_sync(__activemask(), grad_i[n], offset, MGRID_SUBGROUP_SIZE);
+            grad_j[n] += __shfl_down_sync(__activemask(), grad_j[n], offset, MGRID_SUBGROUP_SIZE);
         }
         for (int n = 0; n < 9; ++n) {
-            sigma[n] += __shfl_down_sync(0xffffffff, sigma[n], offset);
+            sigma[n] += __shfl_down_sync(__activemask(), sigma[n], offset, MGRID_SUBGROUP_SIZE);
         }
     }
-    int lane = thread_id % WARP_SIZE;
+    int lane = thread_id % MGRID_SUBGROUP_SIZE;
     int ish_cell0 = ish;
     int bvk_cell_id = jsh / nbas;
     int jsh_cell0 = jsh - nbas * bvk_cell_id;
@@ -381,7 +378,7 @@ void eval_mgga_grad_kernel(double *grad, double *strain, double *dm,
 extern "C" {
 #define eval_mgga_grad_kernel_case(li, lj, slice_i, slice_j) \
     case (li * LMAX1 + lj): \
-        eval_mgga_grad_kernel<li,lj,slice_i,slice_j><<<npairs, threads>>>( \
+        eval_mgga_grad_kernel<li,lj,slice_i,slice_j><<<npairs, threads, 0, stream>>>(\
             grad, strain, dm, vxc, tau, *envs, bas_ij_idx, grid_frac_ranges, \
             da_squared, db_squared, dc_squared, mesh_a, mesh_b, mesh_c, npairs, \
             factor, negligible); \
@@ -391,7 +388,7 @@ int evaluate_mgga_grad(double *grad, double *strain, double *dm,
                        double *vxc, double *tau, PBCIntEnvVars *envs,
                        double *dxyz_dabc, int li, int lj, int64_t *bas_ij_idx,
                        float2 *grid_frac_ranges, int *mesh, int npairs,
-                       double factor, double negligible)
+                       double factor, double negligible, cudaStream_t stream)
 {
     int mesh_a = mesh[0];
     int mesh_b = mesh[1];

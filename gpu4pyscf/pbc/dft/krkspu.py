@@ -21,6 +21,7 @@ Refs: PRB, 1998, 57, 1505.
 
 import numpy as np
 import cupy as cp
+from gpu4pyscf.lib.cusolver import eigh_std
 
 from pyscf import __config__
 from pyscf.data.nist import HARTREE2EV
@@ -29,7 +30,7 @@ from gpu4pyscf.dft.rkspu import _set_U, reference_mol
 from gpu4pyscf.lib import logger
 from gpu4pyscf.pbc.dft import krks
 from gpu4pyscf.pbc.gto import int1e
-from gpu4pyscf.lib.cupy_helper import asarray, contract, einsum
+from gpu4pyscf.lib.cupy_helper import asarray, contract
 
 def get_veff(ks, cell=None, dm=None, dm_last=None, vhf_last=None, hermi=1,
              kpts=None, kpts_band=None):
@@ -137,10 +138,10 @@ def energy_elec(mf, dm_kpts=None, h1e_kpts=None, vhf=None):
         vhf = mf.get_veff(mf.cell, dm_kpts)
 
     if hasattr(kpts, "weights_ibz"):
-        e1 = einsum('k,kij,kji->', kpts.weights_ibz.dot, h1e_kpts, dm_kpts).get()[()]
+        e1 = cp.einsum('k,kij,kji->', kpts.weights_ibz.dot, h1e_kpts, dm_kpts).get()[()]
     else:
         weight = 1./len(h1e_kpts)
-        e1 = weight * einsum('kij,kji', h1e_kpts, dm_kpts).get()[()]
+        e1 = weight * cp.einsum('kij,kji', h1e_kpts, dm_kpts).get()[()]
     ecoul = vhf.ecoul
     exc = vhf.exc.real
     E_U = vhf.E_U.real
@@ -176,7 +177,7 @@ def _make_minao_lo(cell, minao_ref='minao', kpts=None):
     for k, S_k in enumerate(ovlp):
         C = cp.linalg.solve(S_k, s12[k])
         S0 = C.conj().T.dot(S_k).dot(C)
-        w2, v = cp.linalg.eigh(S0)
+        w2, v = eigh_std(S0)
         C_minao[k] = C.dot((v*cp.sqrt(1./w2)).dot(v.conj().T))
     return C_minao
 

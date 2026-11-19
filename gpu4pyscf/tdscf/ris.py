@@ -18,7 +18,7 @@ import cupyx.scipy.linalg as cpx_linalg
 
 from pyscf import gto, lib
 from gpu4pyscf import scf
-from gpu4pyscf.lib.cupy_helper import contract, get_avail_mem, fill_symmetric, einsum
+from gpu4pyscf.lib.cupy_helper import contract, get_avail_mem, fill_symmetric
 from gpu4pyscf.tdscf import parameter, math_helper, spectralib, _lr_eig, _krylov_tools
 from gpu4pyscf.tdscf import rhf as td_rhf
 from pyscf.data.nist import HARTREE2EV
@@ -281,7 +281,7 @@ def get_Tpq(mol, auxmol, lower_inv_eri2c, C_p, C_q,
         return Tia, Tij, Tab
    
 
-def get_eri2c_inv_lower(auxmol, omega=0, alpha=None, beta=None):
+def get_eri2c_inv_lower(auxmol, omega=0, alpha=None, beta=None, dtype=cp.float32):
 
     eri2c = int3c2e_bdiv.int2c2e(auxmol)
 
@@ -308,7 +308,7 @@ def get_eri2c_inv_lower(auxmol, omega=0, alpha=None, beta=None):
         '''
         lower_inv_eri2c = math_helper.matrix_power(eri2c,-0.5,epsilon=LINEAR_EPSILON)
 
-    lower_inv_eri2c = cp.asarray(lower_inv_eri2c, dtype=cp.float32, order='C')
+    lower_inv_eri2c = cp.asarray(lower_inv_eri2c, dtype=dtype, order='C')
     return lower_inv_eri2c
 
 
@@ -889,6 +889,7 @@ class RisBase(lib.StreamObject):
         return get_ab(self, mf, J_fit, K_fit, theta, singlet=True)
     
     def build(self):
+        self.dtype = cp.dtype(cp.float32 if self.single else cp.float64)
         log = self.log
         log.info(f'nstates: {self.nstates}')
         log.info(f'N atoms:{self._scf.mol.natm}')
@@ -1049,7 +1050,7 @@ class RisBase(lib.StreamObject):
         byte_T_ia_J = self.auxmol_J.nao_nr() * self.n_occ * self.n_vir * self.dtype.itemsize
         log.info(f'T_ia_J will take {byte_T_ia_J / (1024 ** 2):.0f} MB memory') 
 
-        self.lower_inv_eri2c_J = get_eri2c_inv_lower(self.auxmol_J, omega=0)
+        self.lower_inv_eri2c_J = get_eri2c_inv_lower(self.auxmol_J, omega=0, dtype=self.dtype)
 
         if self.a_x != 0:
             
@@ -1064,7 +1065,8 @@ class RisBase(lib.StreamObject):
             if self._JK_share_aux:
                 self.lower_inv_eri2c_K = self.lower_inv_eri2c_J
             else:
-                self.lower_inv_eri2c_K = get_eri2c_inv_lower(auxmol_K, omega=self.omega, alpha=self.alpha, beta=self.beta)
+                self.lower_inv_eri2c_K = get_eri2c_inv_lower(auxmol_K, omega=self.omega,
+                                                          alpha=self.alpha, beta=self.beta, dtype=self.dtype)
              
         self.log = log
 
@@ -1162,14 +1164,14 @@ class TDA(RisBase):
         nvir = orbv1.shape[1]
 
         X_mo = xy[0].reshape(nstates, nocc, nvir)
-        X_mo = einsum('ui,nij,vj->nuv', S_occ, X_mo, S_vir)
+        X_mo = cp.einsum('ui,nij,vj->nuv', S_occ, X_mo, S_vir)
         X_mo = X_mo.reshape(nstates, -1)
         Y_mo = xy[1]
         if not isinstance(Y_mo, (np.ndarray, cp.ndarray)):
             return X_mo
 
         Y_mo = xy[1].reshape(nstates, nocc, nvir)
-        Y_mo = einsum('ui,nij,vj->nuv', S_occ, Y_mo, S_vir)
+        Y_mo = cp.einsum('ui,nij,vj->nuv', S_occ, Y_mo, S_vir)
         Y_mo = Y_mo.reshape(nstates, -1)
         return X_mo, Y_mo
 
@@ -1620,12 +1622,11 @@ class StaticPolarizability(RisBase):
         TDA_MVP, hdiag = self.gen_vind()
         transition_dipole = self.transition_dipole()
 
-        _, solver = _krylov_tools.krylov_solver(matrix_vector_product=TDA_MVP,hdiag=hdiag, problem_type='linear',
+        self.converged, X = _krylov_tools.krylov_solver(matrix_vector_product=TDA_MVP,hdiag=hdiag, problem_type='linear',
                                         rhs=-transition_dipole, conv_tol=self.conv_tol, max_iter=self.max_iter, 
                                         gram_schmidt=self.gram_schmidt, single=self.single, verbose=log)
-        X = solver.run()
         # actually X here means X+Y
-        alpha = cp.dot(X, transition_dipole.T)*4
+        alpha = -cp.dot(X, transition_dipole.T)*4
 
         self.xy = X
         self.alpha = alpha

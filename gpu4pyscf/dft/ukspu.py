@@ -23,7 +23,7 @@ import numpy as np
 import cupy as cp
 from pyscf.data.nist import HARTREE2EV
 from gpu4pyscf.lib import logger
-from gpu4pyscf.lib.cupy_helper import asarray, einsum
+from gpu4pyscf.lib.cupy_helper import asarray
 from gpu4pyscf.dft import uks
 from gpu4pyscf.dft.rkspu import (
     _set_U, _make_minao_lo, _print_U_info, reference_mol)
@@ -92,7 +92,7 @@ def energy_elec(mf, dm=None, h1e=None, vhf=None):
     if h1e is None: h1e = mf.get_hcore()
     if vhf is None or getattr(vhf, 'ecoul', None) is None:
         vhf = mf.get_veff(mf.mol, dm)
-    e1 = float(einsum('ij,nji->', h1e, dm).real.get())
+    e1 = float(cp.einsum('ij,nji->', h1e, dm).real.get())
     ecoul = vhf.ecoul.real
     exc = vhf.exc.real
     E_U = vhf.E_U
@@ -219,7 +219,7 @@ def linear_response_u(mf_plus_u, alphalist=(0.02, 0.05, 0.08)):
 
         # The first iteration of SCF
         fock = mf.get_fock(dm=bare_dm)
-        e, mo = mf.eig(fock, ovlp)
+        e, mo = mf.eig(cp.ascontiguousarray(fock), cp.ascontiguousarray(ovlp))
         local_occ = 0
         for c in C_inv:
             C_on_site = [c.dot(mo[0]), c.dot(mo[1])]

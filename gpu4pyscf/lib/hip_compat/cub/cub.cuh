@@ -1,30 +1,11 @@
-/*
- * Copyright 2021-2024 The PySCF Developers. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-/*
- * HIP-build shim: the pbc int3c2e kernels include <cub/cub.cuh> and use
- * cub::BlockScan / cub::BlockReduce. hipCUB provides the same block-level
- * primitives over rocPRIM, so resolve the CUB include to hipCUB and alias the
- * cub namespace. Only the block primitives the kernels touch are exercised.
- */
-// <complex.h> (included ahead of this header by multigrid_v2/screen.cu)
-// defines the macro I, which rocPRIM uses as a template parameter name.
-#ifdef I
+/* CUB -> hipCUB compatibility stub. See gpu_runtime.h in this directory.
+ * Lets existing `#include <cub/cub.cuh>` resolve on ROCm builds and maps the
+ * cub:: namespace onto hipcub::. This directory is placed on the include path
+ * only for HIP builds. Only block-level primitives (BlockReduce/BlockScan) and
+ * their algorithm enums are needed by gpu4pyscf, all of which hipCUB provides. */
+/* The C <complex.h> header (included by some sources) defines `I` as the
+ * imaginary-unit macro, which collides with rocPRIM's `template<size_t I, ...>`
+ * (pulled in via hipCUB). Undefine it before including hipCUB. */
 #undef I
-#endif
 #include <hipcub/hipcub.hpp>
-
 namespace cub = hipcub;

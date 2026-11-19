@@ -21,7 +21,6 @@ from pyscf.pbc import gto as pbcgto
 
 from gpu4pyscf.pbc import scf as pscf
 from gpu4pyscf.pbc.tools import magmom
-from gpu4pyscf.lib.cupy_helper import einsum
 
 
 class KnownValues(unittest.TestCase):
@@ -40,7 +39,7 @@ class KnownValues(unittest.TestCase):
     def assert_magmom_constraints(self, cell, kpts, dm, magmoms, places=10):
         s = pscf.KUHF(cell, kpts=kpts).get_ovlp()
         nkpts = len(kpts)
-        charge = einsum('skij,kji->', dm, s).real.get() / nkpts
+        charge = cp.einsum('skij,kji->', dm, s).real.get() / nkpts
         self.assertAlmostEqual(charge, cell.tot_electrons(nkpts) / nkpts, places)
         cp.testing.assert_allclose(
             dm, dm.swapaxes(-1, -2).conj(), rtol=0, atol=1e-12)
@@ -49,7 +48,7 @@ class KnownValues(unittest.TestCase):
         aoslices = cell.aoslice_by_atom()
         for ia in range(cell.natm):
             p0, p1 = aoslices[ia, 2:]
-            local_magmom = einsum(
+            local_magmom = cp.einsum(
                 'kij,kji->', spin_dm[:, p0:p1], s[:, :, p0:p1]
             ).real.get() / nkpts
             self.assertAlmostEqual(local_magmom, magmoms.get(ia, 0.), places)
@@ -190,7 +189,7 @@ class KnownValues(unittest.TestCase):
                     warn.assert_not_called()
                     self.assert_magmom_constraints(magcell, kpts, dm, magmoms)
                     s = pscf.KUHF(magcell, kpts=kpts).get_ovlp()
-                    nelec = einsum('skij,kji->s', dm, s).real.get()
+                    nelec = cp.einsum('skij,kji->s', dm, s).real.get()
                     np.testing.assert_allclose(
                         nelec, pscf.KUHF(magcell, kpts=kpts).nelec,
                         atol=1e-10, rtol=0)

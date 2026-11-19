@@ -1,13 +1,6 @@
-if(NOT USE_HIP)
-  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --ptxas-options=-v")# -maxrregcount=128")
-endif()
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --ptxas-options=-v")# -maxrregcount=128")
 
-# libpbc supplies the 1e-integral kernels (PBCint1e_kin/ovlp, PBCsort_pair_ij,
-# PBCovlp_mask_estimation) that the molecular HF hcore and scf/jk.py Schwarz
-# cache call, so the ROCm build needs it for HF. The shared warp-max reduction
-# in int3c2e_create_tasks.cuh is made wave-size correct (see that header).
 add_library(pbc SHARED
-  pbc_driver.cu
   ft_ao.cu ft_ao_ip1.cu contract_ft_ao.cu
   fill_int3c2e.cu contract_int3c2e.cu ejk_int3c2e_ip1.cu
   fill_int2c2e.cu fill_int2c2e_ip1.cu e_int2c2e_ip1.cu
@@ -24,13 +17,9 @@ add_library(pbc SHARED
   fill_triu.cu
 )
 
-g4p_set_hip_language(pbc)
 set_target_properties(pbc PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}
-  CUDA_SEPARABLE_COMPILATION ON
-  HIP_SEPARABLE_COMPILATION ON)
-if(USE_HIP)
-  set_target_properties(pbc PROPERTIES HIP_ARCHITECTURES "${CMAKE_HIP_ARCHITECTURES}")
-endif()
+  CUDA_SEPARABLE_COMPILATION ON)
+gpu4pyscf_configure_gpu_target(pbc)
 
 target_link_libraries(pbc OpenMP::OpenMP_C)

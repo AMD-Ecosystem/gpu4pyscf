@@ -17,7 +17,6 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <cuda_runtime.h>
 #include "gvhf-rys/vhf.cuh"
 #include "gvhf-rys/rys_contract_k.cuh"
 
@@ -122,13 +121,7 @@ while (1) {
         if (thread_id < sp_threads) {
             int count = img_counts[thread_id];
             for (int offset = sp_threads/2; offset > 0; offset /= 2) {
-#ifdef USE_HIP
-                // Threads 0..sp_threads-1 form one width-sp_threads segment on
-                // both wave sizes; HIP's __shfl_down_sync needs a 64-bit mask.
-                count = max(count, __shfl_down(count, offset, sp_threads));
-#else
                 count = max(count, __shfl_down_sync(sp_mask, count, offset));
-#endif
             }
             if (thread_id == 0) {
                 img_max = count;
@@ -298,13 +291,7 @@ while (1) {
             int ij = n*gout_stride + gout_id;
             if (ij >= nfij) break;
             for (int offset = nGv_per_block / 2; offset > 0; offset /= 2) {
-#ifdef USE_HIP
-                // Reduce within each nGv_per_block-lane segment (one pair's
-                // Gv points) on both wave sizes.
-                goutR[n] += __shfl_down(goutR[n], offset, nGv_per_block);
-#else
                 goutR[n] += __shfl_down_sync(mask, goutR[n], offset);
-#endif
             }
         }
 
@@ -422,13 +409,7 @@ while (1) {
         if (thread_id < sp_threads) {
             int count = img_counts[thread_id];
             for (int offset = sp_threads/2; offset > 0; offset /= 2) {
-#ifdef USE_HIP
-                // Threads 0..sp_threads-1 form one width-sp_threads segment on
-                // both wave sizes; HIP's __shfl_down_sync needs a 64-bit mask.
-                count = max(count, __shfl_down(count, offset, sp_threads));
-#else
                 count = max(count, __shfl_down_sync(sp_mask, count, offset));
-#endif
             }
             if (thread_id == 0) {
                 img_max = count;
@@ -660,13 +641,7 @@ while (1) {
             int ij = n*gout_stride + gout_id;
             if (ij >= nfij) break;
             for (int offset = nGv_per_block / 2; offset > 0; offset /= 2) {
-#ifdef USE_HIP
-                // Reduce within each nGv_per_block-lane segment (one pair's
-                // Gv points) on both wave sizes.
-                goutR[n] += __shfl_down(goutR[n], offset, nGv_per_block);
-#else
                 goutR[n] += __shfl_down_sync(mask, goutR[n], offset);
-#endif
             }
         }
 
@@ -697,14 +672,14 @@ int contract_ft_aopair(double *out, double *vG, PBCIntEnvVars *envs, int *head,
                        int shm_size, int nbatches_shl_pair, int *shl_pair_offsets,
                        uint32_t *bas_ij_idx, int *img_idx, uint32_t *img_offsets,
                        int *gout_stride_lookup, double *grids, int ngrids,
-                       int compressing)
+                       int compressing, cudaStream_t stream)
 {
     cudaFuncSetAttribute(ft_aopair_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shm_size);
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
     int workers = prop.multiProcessorCount;
-    cudaMemset(head, 0, sizeof(int));
-    ft_aopair_kernel<<<workers, THREADS, shm_size>>>(
+    cudaMemsetAsync(head, 0, sizeof(int), stream);
+    ft_aopair_kernel<<<workers, THREADS, shm_size, stream>>>(
         out, vG, *envs, shl_pair_offsets, bas_ij_idx, img_idx, img_offsets,
         gout_stride_lookup, grids, ngrids, nbatches_shl_pair, compressing, head);
     cudaError_t err = cudaGetLastError();
@@ -719,14 +694,14 @@ int contract_ft_pdotp(double *out, double *vG, PBCIntEnvVars *envs, int *head,
                       int shm_size, int nbatches_shl_pair, int *shl_pair_offsets,
                       uint32_t *bas_ij_idx, int *img_idx, uint32_t *img_offsets,
                       int *gout_stride_lookup, double *grids, int ngrids,
-                      int compressing)
+                      int compressing, cudaStream_t stream)
 {
     cudaFuncSetAttribute(ft_pdotp_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shm_size);
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
     int workers = prop.multiProcessorCount;
-    cudaMemset(head, 0, sizeof(int));
-    ft_pdotp_kernel<<<workers, THREADS, shm_size>>>(
+    cudaMemsetAsync(head, 0, sizeof(int), stream);
+    ft_pdotp_kernel<<<workers, THREADS, shm_size, stream>>>(
         out, vG, *envs, shl_pair_offsets, bas_ij_idx, img_idx, img_offsets,
         gout_stride_lookup, grids, ngrids, nbatches_shl_pair, compressing, head);
     cudaError_t err = cudaGetLastError();

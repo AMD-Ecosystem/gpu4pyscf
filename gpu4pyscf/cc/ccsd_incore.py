@@ -33,7 +33,6 @@ from pyscf.cc import _ccsd
 from pyscf import __config__
 from gpu4pyscf.lib.cupy_helper import (
     load_library, get_avail_mem, fill_symmetric, contract)
-from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.lib import logger
 from gpu4pyscf.scf import int4c2e
 
@@ -53,7 +52,7 @@ def update_amps(mycc, t1, t2, eris):
     wpq, t1new, t2new, wVOov, wVooV = _direct_ovvv_vvvv(mycc, t1, t2)
     t2new *= .5  # *.5 because t2+t2.transpose(1,0,3,2) at the end
 
-    _einsum = einsum
+    _einsum = cupy.einsum
 
     fov = fock[:nocc,nocc:].copy()
     t1new += fock[:nocc,nocc:]
@@ -253,6 +252,7 @@ def _direct_ovvv_vvvv(mycc, t1, t2):
             # Screened quartets are not written by RYS_fill_int4c2e.
             eri_tmp = cp.zeros((nao_pairs, nao_kl_pairs))
             ij0 = ij1 = 0
+            stream = cp.cuda.get_current_stream()
             for ij_id, (i, j) in enumerate(bas_pair_cache):
                 shls_slice = l_ctr_bas_loc[[i, i+1, j, j+1, k, k+1, l, l+1]]
                 pair_ij_mapping, q_cond_ij, s_cond_ij = bas_pair_cache[i,j]
@@ -276,7 +276,8 @@ def _direct_ovvv_vvvv(mycc, t1, t2):
                     ctypes.cast(pair_loc[kl_id].data.ptr, ctypes.c_void_p),
                     ctypes.c_float(log_cutoff),
                     ctypes.cast(pool.data.ptr, ctypes.c_void_p),
-                    mol._bas.ctypes)
+                    mol._bas.ctypes,
+                    ctypes.c_void_p(stream.ptr))
                 if err != 0:
                     llll = f'({l_symb[i]}{l_symb[j]}|{l_symb[k]}{l_symb[l]})'
                     raise RuntimeError(f'fill_int4c2e kernel for {llll} failed')
@@ -498,14 +499,10 @@ class CCSDBase(lib.StreamObject):
     density_fit          = NotImplemented
     nuc_grad_method      = NotImplemented
 
-    # to_cpu can be reused only when __init__ still takes mf
     def to_cpu(self):
+        from gpu4pyscf.lib.utils import to_cpu
         mf = self._scf.to_cpu()
-        from importlib import import_module
-        mod = import_module(self.__module__.replace('gpu4pyscf', 'pyscf'))
-        cls = getattr(mod, self.__class__.__name__)
-        obj = cls(mf)
-        return obj
+        return to_cpu(self, out=ccsd.CCSD(mf))
 
 CCSDBase.ccsd = ccsd.CCSDBase.ccsd
 

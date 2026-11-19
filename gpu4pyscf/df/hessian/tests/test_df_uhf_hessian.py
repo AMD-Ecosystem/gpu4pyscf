@@ -23,7 +23,7 @@ from gpu4pyscf.df.hessian import rhf as df_rhf_hess
 from gpu4pyscf.df.hessian import uhf as df_uhf_hess
 from gpu4pyscf.df.grad import uhf as uhf_grad
 from gpu4pyscf.df import int3c2e_bdiv as int3c2e
-from gpu4pyscf.lib.cupy_helper import tag_array, einsum
+from gpu4pyscf.lib.cupy_helper import tag_array
 
 def setUpModule():
     global mol1, mol, auxmol
@@ -218,7 +218,7 @@ class KnownValues(unittest.TestCase):
         mo_coeff = cp.repeat(mo_coeff[None], 2, axis=0)
         mo_occ = cp.zeros((2,nao))
         mo_occ[:,:nocc] = 1
-        dm = einsum('npi,nqi->npq', mo_coeff[:,:,:nocc], mo_coeff[:,:,:nocc])
+        dm = cp.einsum('npi,nqi->npq', mo_coeff[:,:,:nocc], mo_coeff[:,:,:nocc])
         dm = tag_array(dm, mo_coeff=mo_coeff, mo_occ=mo_occ)
 
         opt = int3c2e.Int3c2eOpt(mol, auxmol).build()
@@ -232,7 +232,7 @@ class KnownValues(unittest.TestCase):
         mo_coeff = cp.array(np.random.rand(2, nao, nao) - .5)
         mo_occ[1,5] = 0
         opt = int3c2e.Int3c2eOpt(mol, auxmol).build()
-        dm = einsum('npi,ni,nqi->npq', mo_coeff, mo_occ, mo_coeff)
+        dm = cp.einsum('npi,ni,nqi->npq', mo_coeff, mo_occ, mo_coeff)
         dm = tag_array(dm, mo_coeff=mo_coeff, mo_occ=mo_occ)
         ejk = df_uhf_hess._jk_energy_per_atom(opt, dm, j_factor=1, k_factor=1).get()
 
@@ -270,7 +270,7 @@ class KnownValues(unittest.TestCase):
         disp = .5e-3
         mol0 = mol2.copy(deep=True)
         auxmol0 = auxmol.copy(deep=True)
-        dm = einsum('npi,ni,nqi->npq', mo_coeff, mo_occ, mo_coeff)
+        dm = cp.einsum('npi,ni,nqi->npq', mo_coeff, mo_occ, mo_coeff)
         def eval_veff(i, x, disp):
             atom_coords = mol2.atom_coords()
             atom_coords[i,x] += disp
@@ -280,9 +280,9 @@ class KnownValues(unittest.TestCase):
             auxmol1 = auxmol0.set_geom_(atom_coords, unit='Bohr')
             j3c = cp.array(incore.aux_e2(mol1, auxmol1))
             j2c = cp.array(auxmol1.intor('int2c2e'))
-            eri = einsum('ijp,pq,klq->ijkl', j3c, cp.linalg.inv(j2c), j3c)
-            vj = einsum('ijkl,nji->kl', eri, dm)
-            vk = einsum('ijkl,njk->nil', eri, dm)
+            eri = cp.einsum('ijp,pq,klq->ijkl', j3c, cp.linalg.inv(j2c), j3c)
+            vj = cp.einsum('ijkl,nji->kl', eri, dm)
+            vk = cp.einsum('ijkl,njk->nil', eri, dm)
             return vj - vk
 
         for i, x in [(0, 0), (0, 1), (0, 2)]:
@@ -303,7 +303,7 @@ class KnownValues(unittest.TestCase):
         mo_coeff = cp.repeat(mo_coeff[None], 2, axis=0)
         mo_occ = cp.zeros((2,nao))
         mo_occ[:,:nocc] = 1
-        dm = einsum('npi,nqi->npq', mo_coeff[:,:,:nocc], mo_coeff[:,:,:nocc])
+        dm = cp.einsum('npi,nqi->npq', mo_coeff[:,:,:nocc], mo_coeff[:,:,:nocc])
         dm = tag_array(dm, mo_coeff=mo_coeff, mo_occ=mo_occ)
 
         opt = int3c2e.Int3c2eOpt(mol1, auxmol).build()

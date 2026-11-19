@@ -25,7 +25,6 @@ except ImportError:
     dftd3 = dftd4 = None
 from gpu4pyscf.lib.multi_gpu import num_devices
 import pytest
-from gpu4pyscf.lib.cupy_helper import einsum
 
 def setUpModule():
     global mol, mol1
@@ -293,7 +292,7 @@ class KnownValues(unittest.TestCase):
         assert np.abs(e_tot - e_ref) < 1e-5
 
     @unittest.skipIf(dftd4 is None, "dftd4 not available")
-    def test_uhf_d4(self):
+    def test_uhf_d4_high_cost(self):
         mf = scf.UHF(mol)
         mf.disp = 'd4'
         mf.kernel()
@@ -326,23 +325,23 @@ class KnownValues(unittest.TestCase):
 
         dm = mf.get_init_guess(key='minao')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 3
-        assert abs(einsum('nij,ji->n', dm, s).get() - (11.999383, 10.999434)).max() < 1e-6
+        assert abs(cupy.einsum('nij,ji->n', dm, s).get() - (11.999383, 10.999434)).max() < 1e-6
 
         dm = mf.get_init_guess(key='hcore')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 3
-        assert abs(einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
+        assert abs(cupy.einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
 
         dm = mf.get_init_guess(key='atom')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 3
-        assert abs(einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
+        assert abs(cupy.einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
 
         dm = mf.get_init_guess(key='huckel')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 3
-        assert abs(einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
+        assert abs(cupy.einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
 
         dm = mf.get_init_guess(key='mod_huckel')
         assert hasattr(dm, 'mo_coeff') and dm.mo_coeff.ndim == 3
-        assert abs(einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
+        assert abs(cupy.einsum('nij,ji->n', dm, s).get() - (12, 11)).max() < 1e-6
 
     # TODO:
     # test_init_guess_breaksym
@@ -351,7 +350,6 @@ class KnownValues(unittest.TestCase):
     #test mulliken_spin_pop
     #test mulliken_meta
     #test mulliken_meta_spin
-    #test stability
     #test newton
     #test x2c
     #test dipole

@@ -32,7 +32,7 @@ from gpu4pyscf.pbc.df.df import GDF
 from gpu4pyscf.pbc.dft import gen_grid
 from gpu4pyscf.pbc.dft import numint
 from gpu4pyscf.pbc.dft import multigrid, multigrid_v3
-from gpu4pyscf.lib.cupy_helper import tag_array, get_avail_mem, einsum
+from gpu4pyscf.lib.cupy_helper import tag_array, get_avail_mem
 from pyscf import __config__
 
 def get_veff(ks, cell=None, dm=None, dm_last=None, vhf_last=None, hermi=1,
@@ -107,11 +107,11 @@ def get_veff(ks, cell=None, dm=None, dm_last=None, vhf_last=None, hermi=1,
         vxc += vj
         ecoul = None
         if ground_state:
-            ecoul = float(einsum('ij,ji->', dm, vj).real.get()) * .5
+            ecoul = float(cp.einsum('ij,ji->', dm, vj).real.get()) * .5
     if hybrid:
         vxc -= .5 * vk
         if ground_state:
-            exc -= float(einsum('ij,ji->', dm, vk).real.get()) * .25
+            exc -= float(cp.einsum('ij,ji->', dm, vk).real.get()) * .25
     vxc = tag_array(vxc, ecoul=ecoul, exc=exc)
     if vj_sr is not None:
         vxc.vj = vj_sr
@@ -160,7 +160,6 @@ class KohnShamDFT(mol_ks.KohnShamDFT):
             self.kpt = self.__dict__.pop('kpt')
 
         kpts = self.kpts
-        khf._check_kpts(kpts)
         # for GDF and MDF
         with_df = self.with_df
         if (isinstance(with_df, GDF) and

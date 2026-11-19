@@ -25,7 +25,6 @@ from gpu4pyscf.gto.ecp import get_ecp_ip
 from gpu4pyscf.lib import utils
 from gpu4pyscf.lib.cupy_helper import (
     tag_array, contract, condense, transpose_sum, get_avail_mem, ndarray)
-from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.__config__ import props as gpu_specs
 from gpu4pyscf.df import int3c2e_bdiv
 from gpu4pyscf.lib import logger
@@ -159,7 +158,8 @@ def _jk_energy_per_atom(vhfopt, dm, j_factor=1., k_factor=1.,
                 ctypes.cast(pool.data.ptr, ctypes.c_void_p),
                 ctypes.cast(dd_pool.data.ptr, ctypes.c_void_p),
                 mol._atm.ctypes, ctypes.c_int(mol.natm),
-                mol._bas.ctypes, ctypes.c_int(mol.nbas), mol._env.ctypes)
+                mol._bas.ctypes, ctypes.c_int(mol.nbas), mol._env.ctypes,
+                ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
             if err != 0:
                 raise RuntimeError(f'RYS_per_atom_jk_ip1 kernel for {llll} failed')
             kern_counts += 1
@@ -241,7 +241,7 @@ def int1e_ipnuc(mol):
         opt, int3c2e_scheme_ip1(omega, 27), batch_size, 'fill_int3c2e_ip1', omega)
     ipnuc = 0
     for batch_id, (p0, p1) in enumerate(zip(aux_offsets[:-1], aux_offsets[1:])):
-        ipnuc += einsum('xpk,k->xp', eval_ip1(batch_id), -charges[p0:p1])
+        ipnuc += cp.einsum('xpk,k->xp', eval_ip1(batch_id), -charges[p0:p1])
 
     pair_addresses = opt.pair_and_diag_indices(cart=True, original_ao_order=False)[0]
     nao = sorted_mol.nao
@@ -297,7 +297,8 @@ def _grad_nuc_without_ecp(mol, dm0):
         lib.c_null_ptr(),
         ctypes.c_int(0),
         ctypes.c_int(0), ctypes.c_int(0),
-        ctypes.c_int(mol.natm), ctypes.c_int(mol.natm))
+        ctypes.c_int(mol.natm), ctypes.c_int(mol.natm),
+        ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
     if err != 0:
         raise RuntimeError('int3c2e_ejk_ip1 failed')
     de += de_aux
@@ -316,8 +317,6 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None, atmlst=None):
     '''
     mf = mf_grad.base
     mol = mf_grad.mol
-    if atmlst is None:
-        atmlst = range(mol.natm)
 
     if mo_energy is None: mo_energy = mf.mo_energy
     if mo_occ is None:    mo_occ = mf.mo_occ
@@ -341,6 +340,8 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None, atmlst=None):
     de = e1_grad + e2_grad
     de += cupy.asnumpy(mf_grad.extra_force())
     log.timer_debug1('gradients of electronic part', *t0)
+    if atmlst is not None:
+        de = de[list(atmlst)]
     return de
 
 def _hcore_energy(mf_grad, dm0, dme0):
@@ -443,13 +444,13 @@ def contract_h1e_dm(mol, h1e, dm, hermi=0):
     atm_id_for_ao = np.repeat(mol._bas[:,gto.ATOM_OF], dims)
 
     if dm.ndim == 2: # RHF
-        de_partial = einsum('xij,ji->ix', h1e, dm).real
+        de_partial = cp.einsum('xij,ji->ix', h1e, dm).real
         if hermi != 1:
-            de_partial += einsum('xij,ij->ix', h1e, dm).real
+            de_partial += cp.einsum('xij,ij->ix', h1e, dm).real
     else: # UHF
-        de_partial = einsum('sxij,sji->ix', h1e, dm).real
+        de_partial = cp.einsum('sxij,sji->ix', h1e, dm).real
         if hermi != 1:
-            de_partial += einsum('sxij,sij->ix', h1e, dm).real
+            de_partial += cp.einsum('sxij,sij->ix', h1e, dm).real
 
     de_partial = de_partial.get()
     de = groupby(atm_id_for_ao, de_partial, op='sum')
@@ -515,6 +516,12 @@ class GradientsBase(lib.StreamObject):
     get_dispersion = get_dispersion
     _hcore_energy = _hcore_energy
 
+    def get_gcp(self, gcp=None, verbose=None):
+        '''Gradient of the gCP/SRB correction. Called only when
+        base.do_gcp() is True, which requires PySCF >= 2.15.'''
+        from pyscf.grad.gcp import get_gcp
+        return get_gcp(self, gcp, verbose)
+
     def get_ovlp(self, mol):
         from gpu4pyscf.pbc.gto.int1e import int1e_ipovlp
         return -int1e_ipovlp(mol)
@@ -528,6 +535,10 @@ class GradientsBase(lib.StreamObject):
             mo_energy = self.base.mo_energy
         if mo_coeff is None: mo_coeff = self.base.mo_coeff
         if mo_occ is None: mo_occ = self.base.mo_occ
+        if atmlst is None:
+            atmlst = self.atmlst
+        else:
+            self.atmlst = atmlst
 
         if self.verbose >= logger.WARN:
             self.check_sanity()
@@ -540,6 +551,11 @@ class GradientsBase(lib.StreamObject):
             self.de = self.symmetrize(self.de)
         if self.base.do_disp():
             self.de += self.get_dispersion()
+        if self.base.do_gcp():
+            self.de += self.get_gcp()
+        # Keep all contributions on the full molecule, then select rows once.
+        if atmlst is not None:
+            self.de = self.de[list(atmlst)]
         log.timer('SCF gradients', *t0)
         self._finalize()
         return self.de

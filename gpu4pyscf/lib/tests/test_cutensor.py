@@ -15,32 +15,33 @@
 import unittest
 import numpy
 import cupy
-from gpu4pyscf.lib.cupy_helper import contract, einsum
+from gpu4pyscf.lib.cupy_helper import contract
+from gpu4pyscf.lib.cutensor import _contract_einsum, contraction
 
 class KnownValues(unittest.TestCase):
     def test_contract(self):
         a = cupy.random.rand(10,9,11)
         b = cupy.random.rand(11,7,13)
-        c_einsum = einsum('ijk,ikl->jl', a[3:9,:,4:10], b[3:9,:6, 7:13])
+        c_einsum = cupy.einsum('ijk,ikl->jl', a[3:9,:,4:10], b[3:9,:6, 7:13])
         c_contract = contract('ijk,ikl->jl', a[3:9,:,4:10], b[3:9,:6, 7:13])
         assert cupy.linalg.norm(c_einsum - c_contract) < 1e-10
 
         a = cupy.random.rand(10,10,10,10)
         b = cupy.random.rand(20,20)
-        c_einsum = einsum('lkji,jl->ik', a, b[10:20,10:20])
+        c_einsum = cupy.einsum('lkji,jl->ik', a, b[10:20,10:20])
         c_contract = contract('lkji,jl->ik', a, b[10:20,10:20])
         assert cupy.linalg.norm(c_einsum - c_contract) < 1e-10
 
         a = cupy.random.rand(10,10,10,10)
         b = cupy.random.rand(20,20)
-        c_einsum = einsum('lkji,jk->il', a, b[10:20,10:20])
+        c_einsum = cupy.einsum('lkji,jk->il', a, b[10:20,10:20])
         c_contract = contract('lkji,jk->il', a, b[10:20,10:20])
         assert cupy.linalg.norm(c_einsum - c_contract) < 1e-10
 
     def test_complex_valued(self):
         a = cupy.random.rand(10,9,11) + cupy.random.rand(10,9,11)*1j
         b = cupy.random.rand(11,7,13) + cupy.random.rand(11,7,13)*1j
-        c_einsum = einsum('ijk,ikl->jl', a[3:9,:,4:10], b[3:9,:6, 7:13])
+        c_einsum = cupy.einsum('ijk,ikl->jl', a[3:9,:,4:10], b[3:9,:6, 7:13])
         c_contract = contract('ijk,ikl->jl', a[3:9,:,4:10], b[3:9,:6, 7:13])
         assert cupy.linalg.norm(c_einsum - c_contract) < 1e-10
 
@@ -49,27 +50,28 @@ class KnownValues(unittest.TestCase):
         b = cupy.random.rand(20,20)
 
         c = contract('ijkl,ik->jl', a, b)
-        c_einsum = einsum('ijkl,ik->jl', a, b)
+        c_einsum = cupy.einsum('ijkl,ik->jl', a, b)
         assert cupy.linalg.norm(c - c_einsum) < 1e-10
 
         c = contract('ijkl,jl->ik', a, b)
-        c_einsum = einsum('ijkl,jl->ik', a, b)
+        c_einsum = cupy.einsum('ijkl,jl->ik', a, b)
         assert cupy.linalg.norm(c - c_einsum) < 1e-10
 
     # issue 614
     def test_zero_strides(self):
         a = cupy.ones((3, 3))
-        assert contract('ij,ji->', a[0,:,None], a[0,None,:]) == 3
+        result = contract('ij,ji->', a[0,:,None], a[0,None,:])
+        self.assertEqual(result.shape, ())
+        assert result == 3
 
     def test_einsum_fallback_contiguous(self):
-        from gpu4pyscf.lib.cutensor import _contract_einsum
         from gpu4pyscf.lib.cupy_helper import hermi_triu, transpose_sum
         ncells, nkpts, nao, comp = 8, 4, 6, 1
         expLkz = cupy.random.rand(ncells, nkpts, 2)
         mat = cupy.random.rand(ncells, comp, nao, nao)
         out = _contract_einsum('lkz,lxpq->kxpqz', expLkz, mat, 1., 0.)
         assert out.flags.c_contiguous
-        ref = einsum('lkz,lxpq->kxpqz', expLkz, mat)
+        ref = cupy.einsum('lkz,lxpq->kxpqz', expLkz, mat)
         assert cupy.linalg.norm(out - ref) < 1e-12
         v = out.view(numpy.complex128)[:,:,:,:,0].reshape(nkpts*comp, nao, nao)
         hermi_triu(v, 1, inplace=True)
@@ -77,7 +79,7 @@ class KnownValues(unittest.TestCase):
         veff = cupy.random.rand(ncells, nao, nao)
         out = _contract_einsum('Lpq,Lkz->kpqz', veff, expLkz, 1., 0.)
         assert out.flags.c_contiguous
-        ref = einsum('Lpq,Lkz->kpqz', veff, expLkz)
+        ref = cupy.einsum('Lpq,Lkz->kpqz', veff, expLkz)
         assert cupy.linalg.norm(out - ref) < 1e-12
         v = out.view(numpy.complex128)[:,:,:,0]
         transpose_sum(v)
@@ -86,160 +88,103 @@ class KnownValues(unittest.TestCase):
         assert out2.flags.c_contiguous
         assert cupy.linalg.norm(out2 - 2*ref) < 1e-12
 
-    def _hip_einsum_matvec(self, subscripts, *operands):
-        # Run cupy.einsum and _hip_einsum with the batch threshold lowered to
-        # 3. Return the number of batched matrix-vector products each issues
-        # and whether _hip_einsum rerouted the call. Routine accelerators are
-        # cleared so that cupy.einsum calls cupy.matmul rather than cuTENSOR.
-        from unittest import mock
-        from cupy._core import _accelerator
-        from gpu4pyscf.lib import cutensor
-        matmul = cupy.matmul
-        def record(a, b, *args, **kwargs):
-            if (a.ndim == 3 and b.ndim == 3 and a.shape[0] > 3 and
-                    (a.shape[1] == 1 or b.shape[2] == 1)):
-                calls[0] += 1
-            return matmul(a, b, *args, **kwargs)
-        accelerators = list(_accelerator.get_routine_accelerators())
-        _accelerator.set_routine_accelerators([])
-        try:
-            with mock.patch.object(cutensor, '_HIP_MAX_BATCH', 3), \
-                 mock.patch.object(cupy, 'matmul', record), \
-                 mock.patch.object(cutensor, '_hip_einsum2',
-                                   wraps=cutensor._hip_einsum2) as einsum2:
-                calls = [0]
-                ref = cupy.einsum(subscripts, *operands)
-                n_ref = calls[0]
-                calls = [0]
-                out = cutensor._hip_einsum(subscripts, *operands)
-                n_out = calls[0]
-        finally:
-            _accelerator.set_routine_accelerators(accelerators)
-        expected = numpy.einsum(subscripts, *[x.get() for x in operands])
-        assert out.shape == expected.shape
-        assert out.dtype == ref.dtype
-        assert abs(out.get() - expected).max() < 1e-10
-        return n_ref, n_out, einsum2.called
+class EinsumFallback(unittest.TestCase):
+    def setUp(self):
+        self.a = cupy.asarray([[1., 2., 3.], [4., 5., 6.]])
+        self.b = cupy.asarray([[-2., 4., 1.], [1., -1., 2.]])
+        self.ref = numpy.einsum('ij,ij->', self.a.get(), self.b.get())
 
-    def test_hip_einsum_broadcast_matvec(self):
-        # 'a' is contracted in the first step because 'd' has size 1 in the
-        # first operand, so the step is a matrix-vector product over 'a'
-        a = cupy.random.rand(1, 4)
-        b = cupy.random.rand(4, 2, 4, 3)
-        c = cupy.random.rand(4, 4, 2)
-        n_ref, n_out, rerouted = self._hip_einsum_matvec('da,deab,dac->', a, b, c)
-        assert n_ref > 0
-        assert n_out == 0
-        assert rerouted
+    def test_scalar_result(self):
+        result = _contract_einsum('ij,ij->', self.a, self.b, 1.5, 0.)
+        self.assertIsInstance(result, cupy.ndarray)
+        self.assertEqual(result.shape, ())
+        self.assertEqual(result.dtype, numpy.dtype(numpy.float64))
+        self.assertEqual(float(result), 1.5 * self.ref)
+        # EDA stores each fully contracted pair energy in a host scalar slot.
+        pair_energies = numpy.zeros((2, 2))
+        pair_energies[0, 1] = result
+        self.assertEqual(pair_energies[0, 1], 1.5 * self.ref)
 
-    def test_hip_einsum_random(self):
-        # _hip_einsum reroutes exactly the calls for which cupy.einsum issues
-        # a batched matrix-vector product, and leaves none of them behind
-        rng = numpy.random.RandomState(7)
-        labels = 'abcdef'
-        size = {c: n for c, n in zip(labels, (2, 3, 4, 5, 2, 3))}
-        n_matvec = 0
-        for _ in range(1000):
-            subs = [''.join(rng.permutation(list(labels))[:rng.randint(1, 5)])
-                    for _ in range(rng.randint(2, 5))]
-            used = ''.join(dict.fromkeys(''.join(subs)))
-            if rng.rand() < .3:
-                subscripts = ','.join(subs)
-            else:
-                out = rng.permutation(list(used))[:rng.randint(0, len(used))]
-                subscripts = ','.join(subs) + '->' + ''.join(out)
-            operands = []
-            for s in subs:
-                shape = [1 if rng.rand() < .25 else size[c] for c in s]
-                x = cupy.asarray(rng.rand(*shape))
-                if rng.rand() < .2:
-                    x = x + 1j * x
-                if rng.rand() < .2:
-                    x = cupy.asfortranarray(x)
-                operands.append(x)
-            n_ref, n_out, rerouted = self._hip_einsum_matvec(subscripts, *operands)
-            assert n_out == 0, subscripts
-            assert rerouted == (n_ref > 0), subscripts
-            n_matvec += n_ref > 0
-        assert n_matvec > 20
+    def test_complex_scalar_result(self):
+        a = self.a + 1j
+        b = self.b - 2j
+        result = _contract_einsum('ij,ij->', a, b, 2., 0.)
+        ref = 2 * numpy.einsum('ij,ij->', a.get(), b.get())
+        self.assertEqual(result.shape, ())
+        self.assertEqual(result.dtype, numpy.dtype(numpy.complex128))
+        numpy.testing.assert_array_equal(result.get(), ref)
 
-    def test_hip_einsum_complex_large(self):
-        # A complex matrix product with more than 2**21 columns, the shape of
-        # the k-point transform in pbc.df.ft_ao. The split, which only gfx12
-        # GPUs take, is forced first so that it is tested on every GPU.
-        from unittest import mock
-        from gpu4pyscf.lib import cutensor
-        matmul = cupy.matmul
-        def record(a, b, *args, **kwargs):
-            if a.dtype.kind == 'c' and max(a.shape[-2], b.shape[-1]) > 1 << 21:
-                calls[0] += 1
-            return matmul(a, b, *args, **kwargs)
-        expLk = cupy.random.rand(2, 2) + 1j * cupy.random.rand(2, 2)
-        a = cupy.random.rand(2, 2, 2, (1 << 19) + 8) * (1 + 1j)
-        ref = numpy.einsum('Lk,pLqG->kpqG', expLk.get(), a.get())
-        calls = [0]
-        with mock.patch.object(cutensor, '_hip_split_complex', lambda: True), \
-             mock.patch.object(cupy, 'matmul', record):
-            out = cutensor._hip_einsum('Lk,pLqG->kpqG', expLk, a)
-        assert calls[0] == 0
-        assert abs(out.get() - ref).max() < 1e-12
-        out = einsum('Lk,pLqG->kpqG', expLk, a)
-        assert abs(out.get() - ref).max() < 1e-12
-        out = contract('Lk,pLqG->kpqG', expLk, a)
-        assert abs(out.get() - ref).max() < 1e-12
+    def test_scalar_output_beta_zero(self):
+        out = cupy.asarray(numpy.nan)
+        result = _contract_einsum('ij,ij->', self.a, self.b, 2., 0., out=out)
+        self.assertIs(result, out)
+        self.assertEqual(out.shape, ())
+        self.assertEqual(float(out), 2 * self.ref)
 
-    def test_hip_einsum_complex_split(self):
-        # With the column limit lowered to 3, _hip_einsum issues no complex
-        # matrix product with more than 3 rows or columns
-        from unittest import mock
-        from cupy._core import _accelerator
-        from gpu4pyscf.lib import cutensor
-        matmul = cupy.matmul
-        def record(a, b, *args, **kwargs):
-            if a.dtype.kind == 'c' and max(a.shape[-2], b.shape[-1]) > 3:
-                calls[0] += 1
-            return matmul(a, b, *args, **kwargs)
-        rng = numpy.random.RandomState(11)
-        labels = 'abcdef'
-        size = {c: n for c, n in zip(labels, (2, 3, 4, 5, 7, 3))}
-        accelerators = list(_accelerator.get_routine_accelerators())
-        _accelerator.set_routine_accelerators([])
-        n_large = 0
-        try:
-            for _ in range(300):
-                subs = [''.join(rng.permutation(list(labels))[:rng.randint(1, 5)])
-                        for _ in range(rng.randint(2, 4))]
-                used = ''.join(dict.fromkeys(''.join(subs)))
-                out = rng.permutation(list(used))[:rng.randint(0, len(used))]
-                subscripts = ','.join(subs) + '->' + ''.join(out)
-                operands = [cupy.asarray(rng.rand(*[size[c] for c in s]) * (1 + 1j))
-                            for s in subs]
-                with mock.patch.object(cutensor, '_HIP_MAX_COLS', 3), \
-                     mock.patch.object(cutensor, '_hip_split_complex', lambda: True), \
-                     mock.patch.object(cupy, 'matmul', record):
-                    calls = [0]
-                    cupy.einsum(subscripts, *operands)
-                    n_large += calls[0] > 0
-                    calls = [0]
-                    res = cutensor._hip_einsum(subscripts, *operands)
-                    assert calls[0] == 0, subscripts
-                expected = numpy.einsum(subscripts, *[x.get() for x in operands])
-                assert res.shape == expected.shape, subscripts
-                assert abs(res.get() - expected).max() < 1e-10, subscripts
-        finally:
-            _accelerator.set_routine_accelerators(accelerators)
-        assert n_large > 50
+    def test_scalar_output_alpha_beta(self):
+        out = cupy.asarray(7.)
+        result = _contract_einsum('ij,ij->', self.a, self.b, 2., -3., out=out)
+        self.assertIs(result, out)
+        self.assertEqual(out.shape, ())
+        self.assertEqual(float(out), 2 * self.ref - 3 * 7.)
 
-    def test_hip_split_complex_gate(self):
-        from gpu4pyscf.lib import cutensor
-        assert cutensor._hip_is_gfx12('gfx1200')
-        assert cutensor._hip_is_gfx12(b'gfx1201')
-        for arch in ('gfx90a:sramecc+:xnack-', 'gfx942', 'gfx1100', b'gfx1151', ''):
-            assert not cutensor._hip_is_gfx12(arch)
-        if cupy.cuda.runtime.is_hip:
-            props = cupy.cuda.runtime.getDeviceProperties(cupy.cuda.Device().id)
-            assert (cutensor._hip_split_complex() ==
-                    props['gcnArchName'].decode().startswith('gfx12'))
+    def test_empty_scalar_contraction(self):
+        a = cupy.empty((0, 3))
+        b = cupy.empty((0, 3))
+        # Empty operands also take this fallback when cuTENSOR is available.
+        result = contract('ij,ij->', a, b)
+        self.assertEqual(result.shape, ())
+        self.assertEqual(float(result), 0.)
+
+    def test_singleton_vector_shape(self):
+        result = _contract_einsum('ij,j->i', self.a[:1], self.b[0], 1., 0.)
+        ref = numpy.einsum('ij,j->i', self.a[:1].get(), self.b[0].get())
+        self.assertEqual(result.shape, (1,))
+        self.assertTrue(result.flags.c_contiguous)
+        numpy.testing.assert_array_equal(result.get(), ref)
+
+    def test_output_input_overlap(self):
+        a_host = numpy.array([[1., 2.], [3., 4.]])
+        b_host = numpy.array([[2., 0.], [1., 3.]])
+        a = cupy.asarray(a_host)
+        out = a.T
+        initial = out.get()
+        expected = 2 * numpy.einsum('ik,kj->ij', a_host, b_host) + 3 * initial
+        result = _contract_einsum('ik,kj->ij', a, cupy.asarray(b_host), 2., 3., out=out)
+        self.assertIs(result, out)
+        numpy.testing.assert_array_equal(result.get(), expected)
+
+    def test_fortran_output_beta_zero_overwrites_nan(self):
+        out = cupy.full((2, 2), numpy.nan, order='F')
+        result = _contract_einsum('ij,kj->ik', self.a, self.b, 2., 0., out=out)
+        self.assertIs(result, out)
+        self.assertTrue(result.flags.f_contiguous)
+        expected = 2 * numpy.einsum('ij,kj->ik', self.a.get(), self.b.get())
+        numpy.testing.assert_array_equal(result.get(), expected)
+
+    def test_broadcast_zero_stride_complex_operand(self):
+        row = numpy.arange(3) + 1j
+        a = cupy.broadcast_to(cupy.asarray(row)[None,:], (4, 3))
+        b_host = numpy.arange(8, dtype=numpy.float64).reshape(4, 2)
+        self.assertEqual(a.strides[0], 0)
+        result = _contract_einsum('ij,ik->jk', a, cupy.asarray(b_host), 1., 0.)
+        expected = numpy.einsum('ij,ik->jk', numpy.broadcast_to(row, (4, 3)), b_host)
+        self.assertTrue(result.flags.c_contiguous)
+        numpy.testing.assert_array_equal(result.get(), expected)
+
+    def test_empty_contraction_with_output(self):
+        # The native entry point deliberately uses its real einsum fallback
+        # before requesting descriptors for unsupported empty operands.
+        a = cupy.empty((2, 0), dtype=numpy.complex128)
+        b = cupy.empty((0, 3), dtype=numpy.float64)
+        out = cupy.arange(6, dtype=numpy.complex128).reshape(2, 3)
+        expected = -.5 * out.get()
+        self.assertIs(contraction('ik,kj->ij', a, b, 2., -.5, out=out), out)
+        numpy.testing.assert_array_equal(out.get(), expected)
+        result = contraction('ik,kj->ij', cupy.empty((0, 2)), cupy.ones((2, 3)), 1., 0.)
+        self.assertEqual(result.shape, (0, 3))
+        self.assertEqual(result.size, 0)
+
 
 if __name__ == "__main__":
     print("Full tests for cutensor module")

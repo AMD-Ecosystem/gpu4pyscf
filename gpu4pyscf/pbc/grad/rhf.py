@@ -23,10 +23,10 @@ from pyscf import gto
 from pyscf.pbc.lib.kpts_helper import gamma_point
 from pyscf.pbc.df.df_jk import _format_kpts_band
 from gpu4pyscf.lib import logger
-from gpu4pyscf.lib.cupy_helper import dist_matrix, asarray, einsum
+from gpu4pyscf.lib.cupy_helper import dist_matrix, asarray
 import gpu4pyscf.grad.rhf as mol_rhf
 from gpu4pyscf.gto.mole import SortedCell
-from gpu4pyscf.pbc.tools.k2gamma import kpts_to_kmesh
+from gpu4pyscf.pbc.lib.kpts_helper import kpts_to_bvkmesh
 from gpu4pyscf.pbc.dft import multigrid, multigrid_v3
 from gpu4pyscf.pbc.scf.rsjk import PBCJKMatrixOpt
 from gpu4pyscf.pbc.df.aft import _get_ZSI
@@ -226,17 +226,17 @@ def contract_h1e_dm(cell, h1e, dm, hermi=0):
     atm_id_for_ao = np.repeat(cell._bas[:,ATOM_OF], dims)
 
     if dm.ndim == 2: # RHF
-        de_partial = einsum('xij,ji->ix', h1e, dm).real
+        de_partial = cp.einsum('xij,ji->ix', h1e, dm).real
         if hermi != 1:
-            de_partial += einsum('xij,ij->ix', h1e, dm.conj()).real
+            de_partial += cp.einsum('xij,ij->ix', h1e, dm.conj()).real
     elif dm.ndim == 3: # KRHF or UHF
-        de_partial = einsum('kxij,kji->ix', h1e, dm).real
+        de_partial = cp.einsum('kxij,kji->ix', h1e, dm).real
         if hermi != 1:
-            de_partial += einsum('kxij,kij->ix', h1e, dm.conj()).real
+            de_partial += cp.einsum('kxij,kij->ix', h1e, dm.conj()).real
     else: # dm.ndim == 4 KUHF
-        de_partial = einsum('skxij,skji->ix', h1e, dm).real
+        de_partial = cp.einsum('skxij,skji->ix', h1e, dm).real
         if hermi != 1:
-            de_partial += einsum('skxij,skji->ix', h1e, dm.conj()).real
+            de_partial += cp.einsum('skxij,skji->ix', h1e, dm.conj()).real
 
     de_partial = de_partial.get()
     de = groupby(atm_id_for_ao, de_partial, op='sum')
@@ -268,10 +268,10 @@ def _gdf_ejk_derivatives(mf, dm, kpts=None, j_factor=1, omega=0, lr_factor=1, sr
         auxcell = make_auxcell(cell, with_df.auxbasis, with_df.exp_to_discard)
 
     if kpts is None:
-        kmesh = None
+        bvkmesh = None
         is_rhf = dm.ndim == 2
     else:
-        kmesh = kpts_to_kmesh(cell, kpts, rcut=cell.rcut+10, bound_by_supmol=False)
+        bvkmesh = kpts_to_bvkmesh(cell, kpts, rcut=cell.rcut+10, bound_by_supmol=False)
         is_rhf = dm.ndim == 3
 
     def get_jk(j_factor, k_factor, omega, exxdiv):
@@ -281,7 +281,7 @@ def _gdf_ejk_derivatives(mf, dm, kpts=None, j_factor=1, omega=0, lr_factor=1, sr
             fn = kuhf._get_ejk_derivatives
         rsdf_omega = max(abs(omega), _guess_omega(cell))
         # DD responses are implemented for Gamma RHF and Gamma J-only.
-        opt = SRInt3c2eOpt(cell, auxcell, rsdf_omega, kmesh)
+        opt = SRInt3c2eOpt(cell, auxcell, rsdf_omega, bvkmesh)
         opt.cell = SortedCell.from_cell(cell, decontract=True, diffuse_cutoff=0.25)
         opt.build(separate_dd=True)
         return fn(opt, dm, kpts, hermi, j_factor, k_factor, exxdiv, omega,
@@ -335,11 +335,11 @@ def _get_ejk_derivatives(mf, dm, kpts=None, j_factor=1, omega=0, lr_factor=1, sr
         if j_factor != 0 and not mf.j_engine and isinstance(with_df, GDF):
             j_factor = 0
             if kpts is None:
-                kmesh = None
+                bvkmesh = None
             else:
-                kmesh = kpts_to_kmesh(cell, kpts, rcut=cell.rcut)
+                bvkmesh = kpts_to_bvkmesh(cell, kpts, rcut=cell.rcut)
             rsdf_omega = 0.3
-            opt = SRInt3c2eOpt(cell, with_df.auxcell, rsdf_omega, kmesh)
+            opt = SRInt3c2eOpt(cell, with_df.auxcell, rsdf_omega, bvkmesh)
             opt.cell = SortedCell.from_cell(cell, decontract=True, diffuse_cutoff=0.25)
             opt.build(separate_dd=True)
             if is_rhf:
@@ -431,13 +431,13 @@ def ewald_derivatives(cell, ew_eta=None, ew_cut=None):
     blksize = int(1e7 // (charge_pairs.size*3))
     for p0, p1 in lib.prange(0, len(Ls), blksize):
         rij = coords[:,None,:] - coords[None,:,:] + Ls[p0:p1,None,None,:]
-        r2 = einsum('nijx,nijx->nij', rij, rij)
+        r2 = cp.einsum('nijx,nijx->nij', rij, rij)
         r2[r2 < 1e-30] = np.inf
         r = cp.sqrt(r2)
         fac = erfc(ew_eta*r)/r + 2*ew_eta/np.sqrt(np.pi)*cp.exp(-ew_eta**2*r2)
         fac *= charge_pairs / r2
-        grad_sigma[:-3] -= einsum('nij,nijx->ix', fac, rij)
-        grad_sigma[-3:] -= .5 * einsum('nij,nijx,nijy->xy', fac, rij, rij)
+        grad_sigma[:-3] -= cp.einsum('nij,nijx->ix', fac, rij)
+        grad_sigma[-3:] -= .5 * cp.einsum('nij,nijx,nijy->xy', fac, rij, rij)
 
     vol = cell.vol
     log_precision = np.log(cell.precision / (charges.sum()*16*np.pi**2))
@@ -450,7 +450,7 @@ def ewald_derivatives(cell, ew_eta=None, ew_cut=None):
     ne_deriv = multigrid_v3._ne_derivatives(cell, ZSI, Gv_bases, ew_eta).get()
     grad_sigma[:-3] += ne_deriv[:-3]
     grad_sigma[-3:] += .5 * ne_deriv[-3:]
-    energy = multigrid_v3._get_coulomb_in_place(ZSI, Gv_bases, ew_eta)[0].get()
+    energy = multigrid_v3._get_coulomb_in_place(cell, ZSI, Gv_bases, ew_eta)[0].get()
     energy *= .5 / vol
     grad_sigma[-3:] -= np.eye(3) * energy
     # Self and background terms have no atomic derivatives. At fixed eta,

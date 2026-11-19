@@ -14,6 +14,7 @@
 
 import unittest
 import numpy as np
+import cupy as cp
 
 import pyscf
 from gpu4pyscf.pbc.dft.rks import RKS
@@ -27,7 +28,6 @@ from gpu4pyscf.pbc.df.grad.krhf import get_nuc
 from gpu4pyscf.pbc.gto.int1e import kin_derivatives
 from gpu4pyscf.lib.multi_gpu import num_devices
 from gpu4pyscf.pbc.grad.rhf import _finite_diff_cells
-from gpu4pyscf.lib.cupy_helper import einsum
 
 def numerical_hcore_gradient_and_stresstensor(cell, dm, kmesh):
     if dm.ndim == 2:
@@ -37,7 +37,7 @@ def numerical_hcore_gradient_and_stresstensor(cell, dm, kmesh):
         mf = KRHF(cell).density_fit(auxbasis="def2-universal-jkfit")
         kpts = cell.make_kpts(kmesh)
         hcore = mf.get_hcore(kpts = kpts)
-        e = einsum("kij,kji->", hcore, dm)
+        e = cp.einsum("kij,kji->", hcore, dm)
         e = e.real / kpts.shape[0]
         return e
 
@@ -294,7 +294,7 @@ class KnownValues(unittest.TestCase):
         assert np.max(np.abs(test_hcore_derivatives[-3:, :] - ref_hcore_derivatives[-3:, :])) < 3e-7
 
     @unittest.skipIf(num_devices > 1, '')
-    def test_gdf_hcore_derivatives_krks(self):
+    def test_gdf_hcore_derivatives_krks_high_cost(self):
         cell = pyscf.M(
             a = '''0.      1.7834  1.7834
                    1.7834  0.      1.7834
@@ -398,7 +398,7 @@ class KnownValues(unittest.TestCase):
         assert np.max(np.abs(test_derivatives[:-3, :] - ref_derivatives[:-3, :])) < 1e-7
         assert np.max(np.abs(test_derivatives[-3:, :] - ref_derivatives[-3:, :])) < 5e-6
 
-    def test_gdf_hcore_derivatives_kuks(self):
+    def test_gdf_hcore_derivatives_kuks_high_cost(self):
         cell = pyscf.M(
             a = '''0.      1.7834  1.8834
                    1.7834  0.      1.7834

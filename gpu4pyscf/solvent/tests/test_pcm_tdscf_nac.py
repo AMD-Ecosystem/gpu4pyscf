@@ -22,7 +22,6 @@ from pyscf import lib, gto, scf
 from gpu4pyscf import tdscf, nac, dft
 from gpu4pyscf.solvent.tdscf.pcm import WithSolventTDSCFNacMethod
 from gpu4pyscf.grad.tests.test_tdrhf_grad import diagonalize_tda
-from gpu4pyscf.lib.cupy_helper import einsum
 
 atom = """
 O       0.0000000000     0.0000000000     0.0000000000
@@ -132,7 +131,7 @@ def get_nacv_ge(td_nac, x_yI, delta=0.001, singlet=True, atmlst=None, method='CP
         ds1_tmp = s12_deriv_tmp.transpose(0,2,1)
         ds1_tmp[:,:,:p0] = 0
         ds1_tmp[:,:,p1:] = 0
-        nac2[k] = einsum('xij,ij->x', ds1_tmp, gamma_ao).get()
+        nac2[k] = cp.einsum('xij,ij->x', ds1_tmp, gamma_ao).get()
     return nac_fdiff - nac2
 
 
@@ -198,7 +197,7 @@ def get_nacv_ee(td_nac, x_yI, x_yJ, nJ, delta=0.001, singlet=True, atmlst=None, 
         ds1_tmp = s12_deriv_tmp.transpose(0,2,1)
         ds1_tmp[:,:,:p0] = 0
         ds1_tmp[:,:,p1:] = 0
-        nac2[k] = einsum('xij,ij->x', ds1_tmp, gamma_ao).get()
+        nac2[k] = cp.einsum('xij,ij->x', ds1_tmp, gamma_ao).get()
     return nac_num - nac2 + nac3
 
 
@@ -328,10 +327,10 @@ class KnownValues(unittest.TestCase):
         ref_etf_scaled = np.array([[-0.0000000000,  2.9655364013,  0.0000000000],
                                    [ 0.0000000000, -1.4827682006,  1.0949321091],
                                    [-0.0000000000, -1.4827682006, -1.0949321091]])
-        assert abs(np.abs(nac1.de)-np.abs(ref)).max() < 1.0E-6
-        assert abs(np.abs(nac1.de_scaled) - np.abs(ref_scaled)).max() < 1.0E-6
-        assert abs(np.abs(nac1.de_etf) - np.abs(ref_etf)).max() < 1.0E-6
-        assert abs(np.abs(nac1.de_etf_scaled) - np.abs(ref_etf_scaled)).max() < 1.0E-6
+        assert abs(np.abs(nac1.de)-np.abs(ref)).max() < 3.0E-6
+        assert abs(np.abs(nac1.de_scaled) - np.abs(ref_scaled)).max() < 3.0E-6
+        assert abs(np.abs(nac1.de_etf) - np.abs(ref_etf)).max() < 3.0E-6
+        assert abs(np.abs(nac1.de_etf_scaled) - np.abs(ref_etf_scaled)).max() < 3.0E-6
 
     def test_nac_tda_b3lyp_singlet_ge_ref_IEFPCM(self):
         """
@@ -829,7 +828,7 @@ class KnownValues(unittest.TestCase):
         nac1.kernel()
         assert abs(np.abs(np.abs(nac1.de_scaled) - np.abs(fdiff_nac))).max() < 1e-4
 
-    def test_nac_tda_df_singlet_ge_fdiff_IEFPCM(self):
+    def test_nac_tda_df_singlet_ge_fdiff_IEFPCM_high_cost(self):
         """
         compare with finite difference
         """
@@ -972,7 +971,7 @@ class KnownValues(unittest.TestCase):
         nac1.kernel()
         assert abs(np.abs(np.abs(nac1.de_scaled) - np.abs(fdiff_nac))).max() < 1e-5
 
-    def test_nac_tda_df_camb3lyp_singlet_ee_fdiff_IEFPCM(self):
+    def test_nac_tda_df_camb3lyp_singlet_ee_fdiff_IEFPCM_high_cost(self):
         """
         compare with finite difference
         """

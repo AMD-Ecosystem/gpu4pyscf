@@ -22,7 +22,6 @@ import gpu4pyscf
 import pytest
 from gpu4pyscf.lib.multi_gpu import num_devices
 from gpu4pyscf.df.tests.test_df_tdrhf_grad import diagonalize_tda
-from gpu4pyscf.lib.cupy_helper import einsum
 
 
 atom = """
@@ -307,27 +306,29 @@ class KnownValues(unittest.TestCase):
             unit='B',)
         mf = mol.RHF().to_gpu()
         nao = mol.nao
-        cp.random.seed(4)
-        c = cp.random.rand(nao, nao) - .5
+        # Backend-independent input: np.random (MT19937) is identical on
+        # every host, unlike cp.random (cuRAND on CUDA, oneMKL on SYCL).
+        np.random.seed(1)
+        c = cp.asarray(np.random.rand(nao, nao)) - .5
         s = mf.get_ovlp()
-        diag = einsum('pi,pq,qi->i', c, s, c)
+        diag = cp.einsum('pi,pq,qi->i', c, s, c)
         mf.mo_coeff = c / diag**.5
         mf.mo_energy = cp.arange(nao)*3.
         mf.mo_occ = cp.zeros(nao)
         nocc = 5
         nvir = nao - nocc
         mf.mo_occ[:nocc] = 2
-        xyI, xyJ = cp.random.rand(2, 2, nocc, nvir) - .5
+        xyI, xyJ = cp.asarray(np.random.rand(2, 2, nocc, nvir)) - .5
         xyI /= cp.linalg.norm(xyI)
         td_nac = mf.TDHF().NAC()
         td_nac.cphf_max_cycle = 1
         td_nac.cphf_conv_tol = 1e-2
         EI, EJ = 1.5, 3.3
         dat = td_nac.get_nacv_ge(xyI, EI, singlet=True)
-        self.assertAlmostEqual(lib.fp(dat), -0.8861638254373593, 12)
+        self.assertAlmostEqual(lib.fp(dat), -1.562561372977336, 12)
 
         dat = td_nac.get_nacv_ee(xyI, xyJ, EI, EJ, singlet=True)
-        self.assertAlmostEqual(lib.fp(dat), 21.96337705366697, 11)
+        self.assertAlmostEqual(lib.fp(dat), 95.843655417449554, 11)
 
 if __name__ == "__main__":
     print("Full Tests for TD-RHF nonadiabatic coupling vectors between excited states.")

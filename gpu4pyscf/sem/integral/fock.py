@@ -18,7 +18,6 @@ import cupyx
 from gpu4pyscf.sem.integral import hcore2c1e, eri_2c2e
 import ctypes
 from gpu4pyscf.sem.lib import libsem
-from gpu4pyscf.lib.cupy_helper import einsum
 
 
 def _calc_kr_offsets(natorb, pair_i, pair_j, n_pairs):
@@ -417,8 +416,8 @@ def get_jk_debug(mol, dm, hermi=1):
     assert hermi == 1, "Only hermitian matrices are supported."
     eri_4d = unpack_eri_4d(mol)
     
-    J = einsum('ls, mnls -> mn', dm, eri_4d)
-    K = einsum('ls, mlns -> mn', dm, eri_4d)
+    J = cp.einsum('ls, mnls -> mn', dm, eri_4d)
+    K = cp.einsum('ls, mlns -> mn', dm, eri_4d)
     
     return J, K
 
@@ -446,6 +445,7 @@ def get_jk(mol, dm):
     aoslice_c = cp.ascontiguousarray(cp.asarray(mol._aoslice), dtype=cp.int32)
     natorb_c = cp.ascontiguousarray(mol.topology.norbitals_per_atom, dtype=cp.int32)
     
+    stream = cp.cuda.get_current_stream()
     if mol.npairs > 0:
         
         w_1d = mol.two_center_integrals.w
@@ -470,7 +470,8 @@ def get_jk(mol, dm):
             ctypes.cast(_LOCAL_ROW_IDX.data.ptr, ctypes.c_void_p), 
             ctypes.cast(_LOCAL_COL_IDX.data.ptr, ctypes.c_void_p),
             ctypes.c_int(int(mol.npairs)),
-            ctypes.c_int(int(nao))
+            ctypes.c_int(int(nao)),
+            ctypes.c_void_p(stream.ptr)
         )
 
         if err != 0:
@@ -525,7 +526,8 @@ def get_jk(mol, dm):
             ctypes.cast(_LOCAL_COL_IDX.data.ptr, ctypes.c_void_p),
             ctypes.c_int(int(mol.natm)),
             ctypes.c_int(int(nao)),
-            ctypes.c_int(int(num_d_pairs))
+            ctypes.c_int(int(num_d_pairs)),
+            ctypes.c_void_p(stream.ptr)
         )
 
         if err != 0:

@@ -6,20 +6,12 @@
 #include "gvhf-rys/create_tasks.cu"
 #include "gvhf-rys/unrolled_kernels.cuh"
 
-#ifdef USE_HIP
-// The kernels below hard-code nsq_per_block, so the launch must keep it.
-// Doubling the block for a kernel that uses <= 128 registers (common on
-// AMD GPUs) would run every task twice and overlap the shared memory slices.
-#undef adjust_threads
-#define adjust_threads(kernel, threads)
-#endif
-
 
 __global__ static
 void rys_ejk_ip2_type12_0000(JKENERGY_KERNEL_ARGS)
 {
     JKENERGY_KERNEL_SETUP();
-    constexpr int nsq_per_block = 256;
+    int nsq_per_block = _nsq_per_block;
     constexpr int gout_stride = 1;
     int t_id = gout_id * nsq_per_block + sq_id;
     int threads = nsq_per_block * gout_stride;
@@ -434,7 +426,7 @@ __global__ static
 void rys_ejk_ip2_type12_1000(JKENERGY_KERNEL_ARGS)
 {
     JKENERGY_KERNEL_SETUP();
-    constexpr int nsq_per_block = 256;
+    int nsq_per_block = _nsq_per_block;
     constexpr int gout_stride = 1;
     int t_id = gout_id * nsq_per_block + sq_id;
     int threads = nsq_per_block * gout_stride;
@@ -1066,7 +1058,7 @@ __global__ static
 void rys_ejk_ip2_type12_1010(JKENERGY_KERNEL_ARGS)
 {
     JKENERGY_KERNEL_SETUP();
-    constexpr int nsq_per_block = 256;
+    int nsq_per_block = _nsq_per_block;
     constexpr int gout_stride = 1;
     int t_id = gout_id * nsq_per_block + sq_id;
     int threads = nsq_per_block * gout_stride;
@@ -4782,7 +4774,7 @@ __global__ static
 void rys_ejk_ip2_type12_1100(JKENERGY_KERNEL_ARGS)
 {
     JKENERGY_KERNEL_SETUP();
-    constexpr int nsq_per_block = 256;
+    int nsq_per_block = _nsq_per_block;
     constexpr int gout_stride = 1;
     int t_id = gout_id * nsq_per_block + sq_id;
     int threads = nsq_per_block * gout_stride;
@@ -14468,7 +14460,7 @@ while (1) {
 int rys_ejk_ip2_type12_unrolled(RysIntEnvVars *envs, JKEnergy *jk, BoundsInfo *bounds,
                         float *q_cond_ij, float *q_cond_kl, float dm_penalty,
                         float *s_cond_ij, float *s_cond_kl, float *diffuse_exps,
-                        uint32_t *pool, double *dd_pool, int *head, int workers)
+                        uint32_t *pool, double *dd_pool, int *head, int workers, cudaStream_t stream)
 {
     int li = bounds->li;
     int lj = bounds->lj;

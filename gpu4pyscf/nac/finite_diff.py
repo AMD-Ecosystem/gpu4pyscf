@@ -18,7 +18,6 @@ from gpu4pyscf import scf, dft
 from gpu4pyscf.lib import logger
 from gpu4pyscf.tdscf import ris
 from scipy.optimize import linear_sum_assignment
-from gpu4pyscf.lib.cupy_helper import einsum
 
 def diagonalize(a, b, nroots=5):
     nocc, nvir = a.shape[:2]
@@ -166,15 +165,13 @@ def get_mf(mol, mf, s, mo_coeff):
     if isinstance(mf, dft.rks.RKS):
         mf_new = dft.RKS(mol)
         mf_new.xc = mf.xc
-        if len(mf.grids.atom_grid) > 0:
-            mf_new.grids.atom_grid = mf.grids.atom_grid
-        else:
-            mf_new.grids.level = mf.grids.level
+        mf_new.grids = mf.grids.copy().reset(mol)
     else:
         mf_new = scf.RHF(mol)
     if getattr(mf, 'with_df', None) is not None:
-        mf_new = mf_new.density_fit()
+        mf_new = mf_new.density_fit(auxbasis=mf.with_df.auxbasis)
     mf_new.conv_tol = mf.conv_tol
+    mf_new.conv_tol_grad = mf.conv_tol_grad
     mf_new.conv_tol_cpscf = mf.conv_tol_cpscf
     mf_new.max_cycle = mf.max_cycle
     mf_new.kernel()
@@ -244,7 +241,7 @@ def get_nacv_ge(td_nac, x_yI, delta=0.001, with_ris=False, singlet=True, atmlst=
         ds1_tmp = s12_deriv_tmp.transpose(0,2,1)
         ds1_tmp[:,:,:p0] = 0
         ds1_tmp[:,:,p1:] = 0
-        nac2[k] = einsum('xij,ij->x', ds1_tmp, gamma_ao).get()
+        nac2[k] = cp.einsum('xij,ij->x', ds1_tmp, gamma_ao).get()
     return nac - nac2
 
 
@@ -310,5 +307,5 @@ def get_nacv_ee(td_nac, x_yI, x_yJ, nJ, delta=0.001, with_ris=False, singlet=Tru
         ds1_tmp = s12_deriv_tmp.transpose(0,2,1)
         ds1_tmp[:,:,:p0] = 0
         ds1_tmp[:,:,p1:] = 0
-        nac2[k] = einsum('xij,ij->x', ds1_tmp, gamma_ao).get()
+        nac2[k] = cp.einsum('xij,ij->x', ds1_tmp, gamma_ao).get()
     return nac - nac2 + nac3

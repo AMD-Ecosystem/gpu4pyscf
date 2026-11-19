@@ -31,9 +31,8 @@ from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.cupy_helper import (
     eigh, tag_array, return_cupy_array, cond, asarray, get_avail_mem,
     block_diag, sandwich_dot, stack_with_padding)
-from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.scf import diis, jk, j_engine
-from . import dispersion
+from . import dispersion, gcp
 from gpu4pyscf.scf.smearing import smearing
 from gpu4pyscf import __config__
 
@@ -91,6 +90,7 @@ def get_occ(mf, mo_energy=None, mo_coeff=None):
     return mo_occ
 
 def get_veff(mf, mol=None, dm=None, dm_last=None, vhf_last=None, hermi=1):
+    if mol is None: mol = mf.mol
     if dm is None: dm = mf.make_rdm1()
     ddm = cupy.asarray(dm)
     if dm_last is not None and mf.direct_scf:
@@ -117,11 +117,11 @@ def _trace_ecoul(vj, ddm, dm_last=None, vhf_last=None):
             # Ecoul = 1/2 (dm_last+ddm)*J[dm_last+ddm]
             # = 1/2 (dm_last*J[dm_last] + 2 dm_last*J[ddm] + ddm*J[ddm])
             # = Ecoul_last + dm_last*J[ddm] + 1/2 ddm*J[ddm]
-            ecoul = float(einsum('ij,ji->', dm_last, vj).real.get())
-            ecoul += float(einsum('ij,ji->', ddm, vj).real.get()) * .5
+            ecoul = float(cupy.einsum('ij,ji->', dm_last, vj).real.get())
+            ecoul += float(cupy.einsum('ij,ji->', ddm, vj).real.get()) * .5
             ecoul += vhf_last.ecoul
     elif ddm.ndim == 2:
-        ecoul = float(einsum('ij,ji->', ddm, vj).real.get()) * .5
+        ecoul = float(cupy.einsum('ij,ji->', ddm, vj).real.get()) * .5
     return ecoul
 
 def get_grad(mo_coeff, mo_occ, fock_ao):
@@ -195,8 +195,8 @@ def energy_elec(mf, dm=None, h1e=None, vhf=None):
     if h1e is None: h1e = mf.get_hcore()
     if vhf is None or getattr(vhf, 'ecoul', None) is None:
         vhf = mf.get_veff(mf.mol, dm)
-    e1 = einsum('ij,ji->', h1e, dm).real.item()
-    e2 = einsum('ij,ji->', vhf, dm).real.item() * .5
+    e1 = cupy.einsum('ij,ji->', h1e, dm).real.item()
+    e2 = cupy.einsum('ij,ji->', vhf, dm).real.item() * .5
     ecoul = vhf.ecoul.real
     exx = e2 - ecoul
     mf.scf_summary['e1'] = e1
@@ -306,6 +306,11 @@ def _kernel(mf, conv_tol=1e-10, conv_tol_grad=None,
         log.info('cycle= %d E= %.15g  delta_E= %4.3g  |g|= %4.3g  |ddm|= %4.3g',
                  cycle+1, e_tot, e_tot-last_hf_e, norm_gorb, norm_ddm)
 
+        if callable(mf.check_convergence):
+            scf_conv = mf.check_convergence(locals())
+        elif abs(e_tot-last_hf_e) < conv_tol and norm_gorb < conv_tol_grad:
+            scf_conv = True
+
         if dump_chk:
             mf.dump_chk({
                 'mol': mol,
@@ -318,9 +323,7 @@ def _kernel(mf, conv_tol=1e-10, conv_tol_grad=None,
         if callable(callback):
             callback(locals())
 
-        e_diff = abs(e_tot-last_hf_e)
-        if(e_diff < conv_tol and norm_gorb < conv_tol_grad):
-            scf_conv = True
+        if scf_conv:
             break
     else:
         log.warn("SCF failed to converge")
@@ -342,11 +345,14 @@ def _kernel(mf, conv_tol=1e-10, conv_tol_grad=None,
 
         conv_tol = conv_tol * 10
         conv_tol_grad = conv_tol_grad * 3
-        if abs(e_tot-last_hf_e) < conv_tol or norm_gorb < conv_tol_grad:
+        if callable(mf.check_convergence):
+            scf_conv = mf.check_convergence(locals())
+        elif abs(e_tot-last_hf_e) < conv_tol or norm_gorb < conv_tol_grad:
             scf_conv = True
         else:
-            log.warn("Level-shifted SCF extra cycle failed to converge")
             scf_conv = False
+        if not scf_conv:
+            log.warn("Level-shifted SCF extra cycle failed to converge")
         logger.info(mf, 'Extra cycle  E= %.15g  delta_E= %4.3g  |g|= %4.3g  |ddm|= %4.3g',
                     e_tot, e_tot-last_hf_e, norm_gorb, norm_ddm)
         if dump_chk:
@@ -371,6 +377,13 @@ def energy_tot(mf, dm=None, h1e=None, vhf=None):
             e_disp = mf.get_dispersion()
             mf.scf_summary['dispersion'] = e_disp
             e_tot += e_disp
+    if mf.do_gcp():
+        if 'gcp' in mf.scf_summary:
+            e_tot += mf.scf_summary['gcp']
+        else:
+            e_gcp = mf.get_gcp()
+            mf.scf_summary['gcp'] = e_gcp
+            e_tot += e_gcp
     mf.scf_summary['nuc'] = nuc.real
     if isinstance(e_tot, cupy.ndarray):
         e_tot = e_tot.get()
@@ -811,6 +824,7 @@ def _init_guess_by_qchem_sad(mol, mf_template, uhf_for_atom=False, high_spin=Tru
         # Its pointers refer to the previous _env and can cause invalid integral
         # reads. Clear it here until the fix is available in supported PySCF versions.
         mol_atom._ecpbas = np.zeros((0, gto.BAS_SLOTS), dtype=np.int32)
+        mol_atom.magmom = []
         mol_atom.build(False, False)
 
         mf_atom = mf_template.copy()
@@ -1234,6 +1248,8 @@ class SCF(pyscf_lib.StreamObject):
     check_convergence        = None
     do_disp                  = dispersion.check_disp
     get_dispersion           = dispersion.get_dispersion
+    do_gcp                   = gcp.check_gcp
+    get_gcp                  = gcp.get_gcp
     kernel = scf             = scf
     as_scanner               = hf_cpu.SCF.as_scanner
     _finalize                = hf_cpu.SCF._finalize
@@ -1244,7 +1260,6 @@ class SCF(pyscf_lib.StreamObject):
     density_fit              = NotImplemented
     newton                   = NotImplemented
     x2c = x2c1e = sfx2c1e    = NotImplemented
-    stability                = NotImplemented
     update_                  = NotImplemented
     istype                   = hf_cpu.SCF.istype
 
@@ -1477,6 +1492,10 @@ class SCF(pyscf_lib.StreamObject):
                 **kwargs):
         return self.to_cpu().analyze(
             verbose=verbose, with_meta_lowdin=with_meta_lowdin, **kwargs)
+
+    def stability(self, internal=True, external=False, verbose=None, return_status=False, **kwargs):
+        from gpu4pyscf.scf.stability import rhf_stability
+        return rhf_stability(self, internal, external, verbose, return_status, **kwargs)
 
     def mulliken_pop(self, mol=None, dm=None, s=None, verbose=logger.DEBUG):
         '''Mulliken population analysis

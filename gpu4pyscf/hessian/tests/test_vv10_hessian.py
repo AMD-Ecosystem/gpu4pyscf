@@ -17,11 +17,11 @@ import numpy as np
 import cupy as cp
 import pyscf
 import pytest
+from pyscf import lib
 from gpu4pyscf.dft import rks, uks
 from gpu4pyscf.hessian.rks import _get_vnlc_deriv1, _get_enlc_deriv2, get_dweight_dA, get_d2weight_dAdB
 from gpu4pyscf.lib.multi_gpu import num_devices
 from gpu4pyscf.dft import gen_grid
-from gpu4pyscf.lib.cupy_helper import einsum
 
 def setUpModule():
     global mol, mol_unrestricted
@@ -219,15 +219,15 @@ def _get_vnlc_deriv1_numerical(hessobj, mo_coeff, mo_occ, max_memory):
     if mo_coeff.ndim == 3:
         mocc0 = mo_coeff[0][:, mo_occ[0]>0]
         mocc1 = mo_coeff[1][:, mo_occ[1]>0]
-        vmat0 = einsum('Adij,jq->Adiq', vmat, mocc0)
-        vmat0 = einsum('Adiq,ip->Adpq', vmat0, mo_coeff[0])
-        vmat1 = einsum('Adij,jq->Adiq', vmat, mocc1)
-        vmat1 = einsum('Adiq,ip->Adpq', vmat1, mo_coeff[1])
+        vmat0 = cp.einsum('Adij,jq->Adiq', vmat, mocc0)
+        vmat0 = cp.einsum('Adiq,ip->Adpq', vmat0, mo_coeff[0])
+        vmat1 = cp.einsum('Adij,jq->Adiq', vmat, mocc1)
+        vmat1 = cp.einsum('Adiq,ip->Adpq', vmat1, mo_coeff[1])
         return vmat0, vmat1
     else:
         mocc = mo_coeff[:,mo_occ>0]
-        vmat = einsum('Adij,jq->Adiq', vmat, mocc)
-        vmat = einsum('Adiq,ip->Adpq', vmat, mo_coeff)
+        vmat = cp.einsum('Adij,jq->Adiq', vmat, mocc)
+        vmat = cp.einsum('Adiq,ip->Adpq', vmat, mo_coeff)
         return vmat
 
 class KnownValues(unittest.TestCase):
@@ -383,8 +383,18 @@ class KnownValues(unittest.TestCase):
 
         assert np.linalg.norm(test_hessian - reference_hessian) < 2e-5
 
-    @pytest.mark.slow
     def test_wb97xv_hessian(self):
+        small_mol = pyscf.M(atom='H 0 0 0; H .2 .1 .8', basis='sto6g', verbose=0)
+        mf = rks.RKS(small_mol, xc='wb97x-v').density_fit()
+        mf.grids.level = 1
+        mf.nlcgrids.level = 0
+        mf.conv_tol_cpscf = 1e-9
+        mf.run(conv_tol=1e-12)
+        assert mf.converged
+        h = mf.Hessian().set(grid_response=False).kernel()
+        assert abs(lib.fp(h) - -0.27988985566) < 1e-6
+
+    def test_wb97xv_hessian_high_cost(self):
         mf = make_mf(mol, vv10_only = False, density_fitting = True)
         # reference_hessian = numerical_d2e_dft(mf)
         reference_hessian = np.array([[[[ 0.4979170248502474,  0.0488882371119104,  0.2658377292182879],
@@ -460,7 +470,7 @@ class KnownValues(unittest.TestCase):
 
     # If you wonder what is special about sto-6g? The answer is: It will trigger prune_by_density_() function
     # and remove some grids there.
-    def test_wb97xv_sto6g_hessian(self):
+    def test_wb97xv_sto6g_hessian_high_cost(self):
         mol_copy = mol.copy()
         mol_copy.basis = "sto-6g"
         mol_copy.build()
@@ -948,6 +958,7 @@ class KnownValues(unittest.TestCase):
 
         assert np.abs(test_energy - ref_energy) < 1e-9
         assert np.linalg.norm(test_hessian - ref_hessian) < 1e-5
+
 
 if __name__ == "__main__":
     print("Full Tests for RKS Hessian with VV10")

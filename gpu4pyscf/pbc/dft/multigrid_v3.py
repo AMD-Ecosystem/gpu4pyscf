@@ -44,20 +44,20 @@ from pyscf.pbc.tools.k2gamma import translation_vectors_for_kmesh
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.cupy_helper import (
     contract, transpose_sum, ndarray, asarray, tag_array, load_library, absmax,
-    get_avail_mem, vec_dot, kernel_source)
-from gpu4pyscf.lib.cupy_helper import einsum
+    get_avail_mem, vec_dot)
 from gpu4pyscf.lib.utils import nearest_power2
 from gpu4pyscf.__config__ import props as gpu_specs
 from gpu4pyscf.lib import multi_gpu
 from gpu4pyscf.dft import numint
 from gpu4pyscf.pbc import tools
-from gpu4pyscf.pbc.tools import k2gamma, get_coulG, ke_to_mesh, mesh_to_ke
-from gpu4pyscf.pbc.lib.kpts_helper import fft_matrix
+from gpu4pyscf.pbc.tools import get_coulG, ke_to_mesh, mesh_to_ke
+from gpu4pyscf.pbc.lib.kpts_helper import (
+    kpts_to_bvkmesh, fft_matrix, _normalize_kpts, _get_kmesh)
 from gpu4pyscf.pbc.df.fft_jk import _format_dms, _format_jks
 from gpu4pyscf.pbc.df.aft import _get_ZSI
 from gpu4pyscf.gto.mole import (
     PTR_BAS_COORD, SortedGTO, SortedCell, PBCIntEnvVars, _scale_sp_ctr_coeff)
-from gpu4pyscf.pbc.gto.pseudo.pp_int import get_pp_nl_gpu
+from gpu4pyscf.pbc.gto.pseudo.pp_int import get_pp_nl
 from gpu4pyscf.pbc.dft import multigrid as multigrid_v1
 
 libmgrid = load_library('libmgrid_v3')
@@ -77,8 +77,7 @@ def _aft_eval_density(ni, dm_sc, kpts=None, with_tau=False):
     assert _is_orthogonal_lattice(a), 'Must be orthogonal lattice'
     b = cell.reciprocal_vectors()
 
-    nkpts = len(ni.bvkmesh_Ls)
-    weight = 1./nkpts
+    weight = 1.
 
     rhoG = cp.zeros(ni.mesh, dtype=np.complex128)
     kern = libmgrid.orth_contract_aopair_dm
@@ -128,7 +127,8 @@ def _aft_eval_density(ni, dm_sc, kpts=None, with_tau=False):
             ctypes.cast(nimgs_cum.data.ptr, ctypes.c_void_p),
             (ctypes.c_int*3)(*mesh),
             ctypes.c_int(nbatches_shl_pair),
-            ctypes.c_double(weight))
+            ctypes.c_double(weight),
+            ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
         if err != 0:
             raise RuntimeError('contract_orth_aopair_dm kernel failed')
         _inv_take_fft_submesh(rhoG, (rhoR, rhoI), mesh)
@@ -186,7 +186,8 @@ def _aft_eval_xc_matrix(ni, vxcG, out=None):
             ctypes.cast(mesh_cum.data.ptr, ctypes.c_void_p),
             ctypes.cast(nimgs_cum.data.ptr, ctypes.c_void_p),
             (ctypes.c_int*3)(*mesh),
-            ctypes.c_int(len(bas_ij_idx)))
+            ctypes.c_int(len(bas_ij_idx)),
+            ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
         if err != 0:
             raise RuntimeError('contract_orth_aopair_coulG kernel failed')
 
@@ -206,7 +207,6 @@ def _eval_density_v2(ni, dm_sc, kpts=None, with_tau=False):
 
     a = cell.lattice_vectors()
     vol = np.linalg.det(a)
-    nkpts = len(ni.bvkmesh_Ls)
 
     work = cp.empty_like(rhoG)
     if not with_tau:
@@ -217,13 +217,14 @@ def _eval_density_v2(ni, dm_sc, kpts=None, with_tau=False):
     mg_envs = ni.mg_envs
 
     fft_buckets = ni.fft_buckets or []
+    stream = cp.cuda.get_current_stream()
     for bucket in fft_buckets:
         mesh = bucket['mesh']
         ngrids = np.prod(mesh)
-        weight = vol / ngrids / nkpts
+        weight = vol / ngrids
 
-        dxyz_dabc = a / mesh[:,None]
-        libmgrid.update_dxyz_dabc(dxyz_dabc.ctypes)
+        dxyz_dabc = bucket['dxyz_dabc']
+        libmgrid.update_dxyz_dabc(dxyz_dabc.ctypes, ctypes.c_void_p(stream.ptr))
 
         rhoR = ndarray(mesh, dtype=np.complex128, buffer=work)
         rhoR.fill(0)
@@ -252,7 +253,8 @@ def _eval_density_v2(ni, dm_sc, kpts=None, with_tau=False):
                 (ctypes.c_int*3)(*atom_mesh),
                 (ctypes.c_int*3)(*mesh),
                 ctypes.c_double(weight),
-                ctypes.c_double(bucket['negligible']))
+                ctypes.c_double(bucket['negligible']),
+                ctypes.c_void_p(stream.ptr))
             if err != 0:
                 raise RuntimeError('evaluate_density kernel failed')
 
@@ -276,7 +278,6 @@ def _eval_density_v1(ni, dm_sc, kpts=None, with_tau=False):
 
     a = cell.lattice_vectors()
     vol = np.linalg.det(a)
-    nkpts = len(ni.bvkmesh_Ls)
 
     nimgs = cell.nimgs
     Tx = np.arange(-nimgs[0], nimgs[0]+1, dtype=np.float64)
@@ -296,13 +297,14 @@ def _eval_density_v1(ni, dm_sc, kpts=None, with_tau=False):
     fft_buckets = ni.fft_buckets or []
     tile_info = _grid_range_to_tile_info_converter(fft_buckets, cell)
 
+    stream = cp.cuda.get_current_stream()
     for bucket in fft_buckets:
         mesh = bucket['mesh']
         ngrids = np.prod(mesh)
-        weight = vol / ngrids / nkpts
+        weight = vol / ngrids
 
-        dxyz_dabc = a / mesh[:,None]
-        libmgrid.update_dxyz_dabc(dxyz_dabc.ctypes)
+        dxyz_dabc = bucket['dxyz_dabc']
+        libmgrid.update_dxyz_dabc(dxyz_dabc.ctypes, ctypes.c_void_p(stream.ptr))
 
         rhoR = ndarray(mesh, dtype=np.complex128, buffer=work)
         rhoR.fill(0)
@@ -333,7 +335,8 @@ def _eval_density_v1(ni, dm_sc, kpts=None, with_tau=False):
                 ctypes.c_int(ntiles),
                 (ctypes.c_int*3)(*mesh),
                 ctypes.c_double(weight),
-                ctypes.c_double(bucket['negligible']))
+                ctypes.c_double(bucket['negligible']),
+                ctypes.c_void_p(stream.ptr))
             if err != 0:
                 raise RuntimeError('evaluate_density kernel failed')
 
@@ -350,6 +353,7 @@ _eval_density = _eval_density_v2
 def _eval_rhoG(ni, dm_kpts, hermi=1, kpts=None, xctype='LDA'):
     assert xctype == 'LDA'
     assert not ni.allow_mesh_reduction
+    kpts, _ = _normalize_kpts(kpts)
     dm_sc = _wannier_transform_dm(ni, dm_kpts, kpts, hermi=1)
     n_dm, nkpts, nao = dm_sc.shape[:3]
     rhoG = cp.array([_eval_density(ni, dm_sc[i])[0] for i in range(n_dm)])
@@ -379,15 +383,14 @@ def _eval_xc_mat_v2(ni, vxcG, out=None, work=None):
         work = ndarray((4,vrhoG.size), dtype=np.float64, buffer=work)
         kern = libmgrid.evaluate_mgga_mat_v2
 
-    a = cell.lattice_vectors()
-
     mg_envs = ni.mg_envs
 
     fft_buckets = ni.fft_buckets or []
+    stream = cp.cuda.get_current_stream()
     for bucket in fft_buckets:
         mesh = bucket['mesh']
-        dxyz_dabc = a / mesh[:,None]
-        libmgrid.update_dxyz_dabc(dxyz_dabc.ctypes)
+        dxyz_dabc = bucket['dxyz_dabc']
+        libmgrid.update_dxyz_dabc(dxyz_dabc.ctypes, ctypes.c_void_p(stream.ptr))
 
         sub_vrhoG = _take_fft_submesh(vrhoG, mesh, work[:2])
         sub_vrhoR = ndarray(mesh, dtype=np.float64, buffer=work[2])
@@ -415,7 +418,8 @@ def _eval_xc_mat_v2(ni, vxcG, out=None, work=None):
                 ctypes.cast(grid_frac_ranges.data.ptr, ctypes.c_void_p),
                 (ctypes.c_int*3)(*mesh),
                 ctypes.c_int(len(bas_ij_idx)),
-                ctypes.c_double(bucket['negligible']))
+                ctypes.c_double(bucket['negligible']),
+                ctypes.c_void_p(stream.ptr))
             if err != 0:
                 raise RuntimeError('evaluate_xc_mat kernel failed')
     return vxc_mat
@@ -456,11 +460,12 @@ def _eval_xc_mat_v1(ni, vxcG, out=None, work=None):
     mg_envs = ni.mg_envs
 
     fft_buckets = ni.fft_buckets or []
+    stream = cp.cuda.get_current_stream()
     for bucket in fft_buckets:
         assert bucket['grid_tile_cache'] is not None
         mesh = bucket['mesh']
-        dxyz_dabc = a / mesh[:,None]
-        libmgrid.update_dxyz_dabc(dxyz_dabc.ctypes)
+        dxyz_dabc = bucket['dxyz_dabc']
+        libmgrid.update_dxyz_dabc(dxyz_dabc.ctypes, ctypes.c_void_p(stream.ptr))
 
         sub_vrhoG = _take_fft_submesh(vrhoG, mesh, work[:2])
         sub_vrhoR = ndarray(mesh, dtype=np.float64, buffer=work[2])
@@ -491,7 +496,8 @@ def _eval_xc_mat_v1(ni, vxcG, out=None, work=None):
                 ctypes.cast(grid_tile_idx.data.ptr, ctypes.c_void_p),
                 ctypes.c_int(len(grid_tile_idx)),
                 (ctypes.c_int*3)(*mesh),
-                ctypes.c_double(bucket['negligible']))
+                ctypes.c_double(bucket['negligible']),
+                ctypes.c_void_p(stream.ptr))
             if err != 0:
                 raise RuntimeError('evaluate_xc_mat kernel failed')
     return vxc_mat
@@ -519,16 +525,15 @@ def _eval_gradients(ni, dm_sc, vxcG, fft_buckets, work=None):
         work = ndarray((4,vrhoG.size), dtype=np.float64, buffer=work)
         kern = libmgrid.evaluate_mgga_grad
 
-    a = cell.lattice_vectors()
-    nkpts = len(ni.bvkmesh_Ls)
-    weight = 1./nkpts
+    weight = 1.
 
     mg_envs = ni.mg_envs
 
+    stream = cp.cuda.get_current_stream()
     for bucket in fft_buckets:
         mesh = bucket['mesh']
-        dxyz_dabc = a / mesh[:,None]
-        libmgrid.update_dxyz_dabc(dxyz_dabc.ctypes)
+        dxyz_dabc = bucket['dxyz_dabc']
+        libmgrid.update_dxyz_dabc(dxyz_dabc.ctypes, ctypes.c_void_p(stream.ptr))
 
         sub_vrhoG = _take_fft_submesh(vrhoG, mesh, work[:2])
         sub_vrhoR = ndarray(mesh, dtype=np.float64, buffer=work[2])
@@ -559,7 +564,8 @@ def _eval_gradients(ni, dm_sc, vxcG, fft_buckets, work=None):
                 (ctypes.c_int*3)(*mesh),
                 ctypes.c_int(len(bas_ij_idx)),
                 ctypes.c_double(weight),
-                ctypes.c_double(bucket['negligible']))
+                ctypes.c_double(bucket['negligible']),
+                ctypes.c_void_p(stream.ptr))
             if err != 0:
                 raise RuntimeError('evaluate_xc_grad kernel failed')
     return grad_sigma
@@ -609,7 +615,8 @@ def _estimate_Ecut_and_grid_ranges(ni, bas_ij_idx, precision, xctype):
         ctypes.c_int(npairs),
         ctypes.c_int(li_inc), ctypes.c_int(lj_inc),
         ctypes.c_float(math.log(precision/3)),
-        ctypes.c_float(undressed_threshold))
+        ctypes.c_float(undressed_threshold),
+        ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
     if err != 0:
         raise RuntimeError('grid range kernel failed')
     return pair_ke, grid_frac_ranges, primary_atoms
@@ -641,7 +648,7 @@ def _partition_ke_for_aft(ni, pair_idx, pair_ke, init_ke, ke_max, xctype, log):
     nimgs = np.asarray(bvkcell.nimgs, dtype=np.int32)
 
     ke_upper = float(pair_ke.max().get())
-    ke_upper = min(ke_upper, ke_max)
+    ke_upper = min(ke_upper, float(ke_max))
     mesh = mesh_max = np.minimum(ke_to_mesh(a, ke_upper), ni.mesh)
     ke_lower = ke_upper * 0.6
 
@@ -758,7 +765,8 @@ def _partition_ke_for_fft(ni, pair_idx, init_ke, ke_max, precision, xctype, log)
                     ctypes.cast(grid_ranges.data.ptr, ctypes.c_void_p),
                     ctypes.cast(shl_pair_offsets.data.ptr, ctypes.c_void_p),
                     ctypes.c_int(len(bas_ij_idx)),
-                    ctypes.c_int(nseg))
+                    ctypes.c_int(nseg),
+                    ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
                 if err != 0:
                     raise RuntimeError('atom_grid_ranges kernel failed')
                 atom_grid_ranges_cache.append(atom_grid_ranges)
@@ -788,6 +796,7 @@ def _partition_ke_for_fft(ni, pair_idx, init_ke, ke_max, precision, xctype, log)
             buckets.append({
                 'ke_cutoff': ke_upper,
                 'mesh': np.asarray(mesh, dtype=np.int32),
+                'dxyz_dabc': a / mesh[:,None],
                 'lij_patterns': lilj_patterns,
                 'bas_ij_cache': bas_ij_cache,
                 'grid_ranges_cache': grid_ranges_cache,
@@ -828,7 +837,8 @@ def _non_trivial_bvk_pairs(ni, precision):
         ctypes.byref(ni.mg_envs),
         ctypes.cast(Ls.data.ptr, ctypes.c_void_p),
         ctypes.c_int(nimgs),
-        ctypes.c_float(math.log(precision)))
+        ctypes.c_float(math.log(precision)),
+        ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
     if err != 0:
         raise RuntimeError('bvk_ovlp_mask_estimation kernel failed')
 
@@ -852,7 +862,8 @@ def _bvk_pairs_to_supmol_pairs(ni, bas_ij_idx, precision, xctype):
         ctypes.c_int(npairs),
         ctypes.c_float(math.log(precision)),
         ctypes.c_int(is_mgga),
-        ctypes.cast(counts.data.ptr, ctypes.c_void_p))
+        ctypes.cast(counts.data.ptr, ctypes.c_void_p),
+        ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
     if err != 0:
         raise RuntimeError('bvk_ovlp_mask_estimation kernel failed')
     supmol_bas_ij_idx = supmol_bas_ij_idx[:int(counts[0].get())]
@@ -881,7 +892,8 @@ def _aft_Ecut_estimation(ni, bas_ij_idx, ke_max, precision, xctype='LDA'):
         # Set the upper limit of Ecut. This ensures all high-Ecut orbital pairs
         # are handled by the last bucket in fft_buckets
         ctypes.c_float(ke_max),
-        ctypes.c_int(is_mgga))
+        ctypes.c_int(is_mgga),
+        ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
     if err != 0:
         raise RuntimeError('Ecut kernel failed')
     return Ecut
@@ -920,7 +932,8 @@ def _grid_range_to_tile_info_converter(fft_buckets, cell):
             (ctypes.c_int*3)(*mesh),
             ctypes.c_int(npairs),
             ctypes.c_int(nbas),
-            ctypes.cast(tile_counts.data.ptr, ctypes.c_void_p))
+            ctypes.cast(tile_counts.data.ptr, ctypes.c_void_p),
+            ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
         if err != 0:
             raise RuntimeError('grid_range_to_tiles failed')
         n = int(tile_counts[0].get())
@@ -962,7 +975,8 @@ def _take_fft_submesh(a, mesh, out=None):
         ctypes.cast(a.data.ptr, ctypes.c_void_p),
         (ctypes.c_int*3)(*mesh),
         (ctypes.c_int*3)(*inp_shape),
-        ctypes.c_int(counts))
+        ctypes.c_int(counts),
+        ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
     if err != 0:
         raise RuntimeError('fft_take kernel failed')
     return out
@@ -990,7 +1004,8 @@ def _inv_take_fft_submesh(out, a, mesh):
         ctypes.cast(a.data.ptr, ctypes.c_void_p),
         (ctypes.c_int*3)(*out_shape),
         (ctypes.c_int*3)(*mesh),
-        ctypes.c_int(counts))
+        ctypes.c_int(counts),
+        ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
     if err != 0:
         raise RuntimeError('fft_takebak kernel failed')
     return out
@@ -1012,9 +1027,8 @@ def _apply_Gv_1j(rhoG, Gx, Gy, Gz, out=None):
     fn_name = 'apply_Gv_1j'
     if fn_name not in _kernel_registery:
         kernel_code = ('''\
-#include <cuComplex.h>
 extern "C" __global__
-void ''' + fn_name + r'''(cuDoubleComplex* __restrict__ out, cuDoubleComplex *rhoG,
+void ''' + fn_name + r'''(double2* __restrict__ out, double2 *rhoG,
     double *Gx, double *Gy, double *Gz, long long nx, long long ny, long long nz) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
     int stride = gridDim.x * blockDim.x;
@@ -1025,12 +1039,12 @@ void ''' + fn_name + r'''(cuDoubleComplex* __restrict__ out, cuDoubleComplex *rh
         int iyz = g - nyz * ix;
         int iy = iyz / nz;
         int iz = iyz - nz * iy;
-        cuDoubleComplex rho = rhoG[g];
+        double2 rho = rhoG[g];
         double Gv = Gx[ix] + Gy[iy] + Gz[iz];
-        out[g] = make_cuDoubleComplex(-Gv * cuCimag(rho), Gv * cuCreal(rho));
+        out[g] = {-Gv * rho.y, Gv * rho.x};
     }
 }''')
-        _kernel_registery[fn_name] = cp.RawKernel(kernel_source(kernel_code), fn_name)
+        _kernel_registery[fn_name] = cp.RawKernel(kernel_code, fn_name)
 
     kernel = _kernel_registery[fn_name]
     out = ndarray(rhoG.shape, buffer=out, dtype=np.complex128)
@@ -1043,9 +1057,8 @@ def _contract_Gv_1j(out, xc, Gx, Gy, Gz):
     fn_name = 'contract_Gv_1j'
     if fn_name not in _kernel_registery:
         kernel_code = ('''\
-#include <cuComplex.h>
 extern "C" __global__
-void ''' + fn_name + r'''(cuDoubleComplex* __restrict__ out, cuDoubleComplex *vxcG,
+void ''' + fn_name + r'''(double2* __restrict__ out, double2 *vxcG,
     double *Gx, double *Gy, double *Gz, long long nx, long long ny, long long nz) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
     int stride = gridDim.x * blockDim.x;
@@ -1058,21 +1071,19 @@ void ''' + fn_name + r'''(cuDoubleComplex* __restrict__ out, cuDoubleComplex *vx
         int iz = iyz - nz * iy;
         // (-i Gv) * v
         double Gv = Gx[ix] + Gy[iy] + Gz[iz];
-        cuDoubleComplex res = out[g];
-        cuDoubleComplex v = vxcG[g];
-        res.x += Gv * cuCimag(v);
-        res.y -= Gv * cuCreal(v);
-        out[g] = res;
+        double2 res = out[g];
+        double2 v = vxcG[g];
+        out[g] = {res.x + Gv * v.y, res.y - Gv * v.x};
     }
 }''')
-        _kernel_registery[fn_name] = cp.RawKernel(kernel_source(kernel_code), fn_name)
+        _kernel_registery[fn_name] = cp.RawKernel(kernel_code, fn_name)
 
     kernel = _kernel_registery[fn_name]
     workers = gpu_specs['multiProcessorCount']
     kernel((workers*2,), (1024,), (out, xc, Gx, Gy, Gz, len(Gx), len(Gy), len(Gz)))
     return out
 
-def _get_coulomb_in_place(rhoG, Gv_bases, omega=0):
+def _get_coulomb_in_place(cell, rhoG, Gv_bases, omega=0):
     '''
     Computes
         Ecoul = rhoG.conj().dot(rhoG * coulG)
@@ -1080,7 +1091,16 @@ def _get_coulomb_in_place(rhoG, Gv_bases, omega=0):
     where
         coulG = 4pi/G^2 for full-range Coulomb potential or
         coulG = 4pi/G^2*exp(-G^2/(4*omega^2)) for long-range potential
+    Passing a 2D cell uses its truncated kernel, including the finite G=0
+    term. 3D cells retain the optimized implementation.
     '''
+    if cell.dimension == 2:
+        assert cell.low_dim_ft_type != 'inf_vacuum'
+        mesh = tuple(x.shape[1] for x in Gv_bases)
+        coulG = get_coulG(cell, mesh=mesh, omega=omega).reshape(rhoG.shape)
+        ecoul = cp.vdot(rhoG, rhoG * coulG).real
+        rhoG *= coulG
+        return ecoul, rhoG
     fn_name = 'get_coulG'
     if fn_name not in _kernel_registery:
         kernel_code = ('''\
@@ -1116,8 +1136,9 @@ void ''' + fn_name + r'''(double *energy, double2* __restrict__ rhoG,
         }
         rhoG[g] = coul;
     }
+    // __activemask() has HIP's 64-bit mask type; width 32 keeps logical warps.
     for (int offset = 16; offset > 0; offset >>= 1) {
-        Ecoul += __shfl_down_sync(0xffffffff, Ecoul, offset);
+        Ecoul += __shfl_down_sync(__activemask(), Ecoul, offset, 32);
     }
     __shared__ double swap[32];
     int lane = tid % 32;
@@ -1128,12 +1149,12 @@ void ''' + fn_name + r'''(double *energy, double2* __restrict__ rhoG,
     if (warp == 0) {
         Ecoul = (lane < num_warps) ? swap[lane] : 0.;
         for (int offset = 16; offset > 0; offset >>= 1) {
-            Ecoul += __shfl_down_sync(0xffffffff, Ecoul, offset);
+            Ecoul += __shfl_down_sync(__activemask(), Ecoul, offset, 32);
         }
     }
     if (tid == 0) atomicAdd(energy, Ecoul);
 }''')
-        _kernel_registery[fn_name] = cp.RawKernel(kernel_source(kernel_code), fn_name)
+        _kernel_registery[fn_name] = cp.RawKernel(kernel_code, fn_name)
 
     kernel = _kernel_registery[fn_name]
     nx, ny, nz = [x.shape[1] for x in Gv_bases]
@@ -1190,21 +1211,22 @@ int nx, int ny, int nz)
     int num_warps = blockDim.x / 32;
     for (int n = 0; n < 9; n++) {
         for (int offset = 16; offset > 0; offset >>= 1) {
-            sigma[n] += __shfl_down_sync(0xffffffff, sigma[n], offset);
+            sigma[n] += __shfl_down_sync(__activemask(), sigma[n], offset, 32);
         }
         if (lane == 0) swap[warp] = sigma[n];
         __syncthreads();
         if (warp == 0) {
             sigma[n] = (lane < num_warps) ? swap[lane] : 0.;
             for (int offset = num_warps/2; offset > 0; offset >>= 1) {
-                sigma[n] += __shfl_down_sync(0xffffffff, sigma[n], offset);
+                sigma[n] += __shfl_down_sync(__activemask(), sigma[n], offset, 32);
             }
         }
         __syncthreads();
         if (tid == 0) atomicAdd(out+n, sigma[n]);
+        __syncthreads(); // Finish reading swap before the next component writes it.
     }
 }'''
-        _kernel_registery[fn_name] = cp.RawKernel(kernel_source(kernel_code), fn_name)
+        _kernel_registery[fn_name] = cp.RawKernel(kernel_code, fn_name)
     kernel = _kernel_registery[fn_name]
 
     nx, ny, nz = [x.shape[1] for x in Gv_bases]
@@ -1327,9 +1349,9 @@ double cexp0, double cexp1, double cexp2, double cexp3)
         for (int ia = 0; ia < block; ++ia) {
             if (ia0 + ia >= atom_batch_size) break;
             for (int offset = 16; offset > 0; offset >>= 1) {
-                de[ia*3+0] += __shfl_down_sync(0xffffffff, de[ia*3+0], offset);
-                de[ia*3+1] += __shfl_down_sync(0xffffffff, de[ia*3+1], offset);
-                de[ia*3+2] += __shfl_down_sync(0xffffffff, de[ia*3+2], offset);
+                de[ia*3+0] += __shfl_down_sync(__activemask(), de[ia*3+0], offset, 32);
+                de[ia*3+1] += __shfl_down_sync(__activemask(), de[ia*3+1], offset, 32);
+                de[ia*3+2] += __shfl_down_sync(__activemask(), de[ia*3+2], offset, 32);
             }
             if (lane == 0) {
                 int i_atom = atom_ids[ia0+ia];
@@ -1339,14 +1361,14 @@ double cexp0, double cexp1, double cexp2, double cexp3)
     }
     for (int offset = 16; offset > 0; offset >>= 1) {
         for (int n = 0; n < 9; n++) {
-            sigma[n] += __shfl_down_sync(0xffffffff, sigma[n], offset);
+            sigma[n] += __shfl_down_sync(__activemask(), sigma[n], offset, 32);
         }
     }
     if (lane == 0) {
         for (int n = 0; n < 9; n++) atomicAdd(strain+n, sigma[n]);
     }
 }'''
-        _kernel_registery[fn_name] = cp.RawKernel(kernel_source(kernel_code), fn_name)
+        _kernel_registery[fn_name] = cp.RawKernel(kernel_code, fn_name)
     kernel = _kernel_registery[fn_name]
     workers = gpu_specs['multiProcessorCount']
 
@@ -1443,7 +1465,7 @@ int nx, int ny, int nz, int natm)
         }
         for (int offset = 16; offset > 0; offset >>= 1) {
             for (int n = 0; n < 3; n++) {
-                de[n] += __shfl_down_sync(0xffffffff, de[n], offset);
+                de[n] += __shfl_down_sync(__activemask(), de[n], offset, 32);
             }
         }
         if (lane == 0) {
@@ -1452,14 +1474,14 @@ int nx, int ny, int nz, int natm)
     }
     for (int offset = 16; offset > 0; offset >>= 1) {
         for (int n = 0; n < 9; n++) {
-            sigma[n] += __shfl_down_sync(0xffffffff, sigma[n], offset);
+            sigma[n] += __shfl_down_sync(__activemask(), sigma[n], offset, 32);
         }
     }
     if (lane == 0) {
         for (int n = 0; n < 9; n++) atomicAdd(strain+n, sigma[n]);
     }
 }'''
-        _kernel_registery[fn_name] = cp.RawKernel(kernel_source(kernel_code), fn_name)
+        _kernel_registery[fn_name] = cp.RawKernel(kernel_code, fn_name)
     kernel = _kernel_registery[fn_name]
 
     nx, ny, nz = [x.shape[1] for x in Gv_bases]
@@ -1559,10 +1581,10 @@ def _vxc_to_reciprocal_space(vxc, out, Gv_bases=None, work=None):
         return out
 
 def _wannier_transform_dm(ni, dm_kpts, kpts, hermi=1, xctype='LDA', out=None):
-    if kpts is None:
-        kpts = np.zeros((1, 3))
-    else:
-        kpts = kpts.reshape(-1, 3)
+    # A single non-Gamma point can produce a complex image-space density.
+    # The current real-valued multigrid kernels do not support.
+    assert len(kpts) > 1 or is_zero(kpts), \
+        'Single non-Gamma k-point sampling is not supported by multigrid'
 
     ni._ensure_initialized(kpts, xctype)
 
@@ -1582,16 +1604,17 @@ def _wannier_transform_dm(ni, dm_kpts, kpts, hermi=1, xctype='LDA', out=None):
     if bvk_ncells == 1:
         dm_sc = dms
     else:
-        if bvk_ncells != nkpts:
-            expLk = cp.exp(1j*cp.asarray(ni.bvkmesh_Ls).dot(cp.asarray(kpts).T))
-        else:
-            expLk = fft_matrix(ni.kmesh)
+        kmesh, with_gamma_point = _get_kmesh(ni.cell, kpts, ni.bvkmesh)
+        assert kmesh is not None, "A complete MP mesh in cell.make_kpts ordering is required"
+        expLk = fft_matrix(kmesh, with_gamma_point)
         dm_sc = contract('nkpq,Lk->nLqp', dms, expLk)
         assert absmax(dm_sc.imag) < cell.precision*5e2
     dm_sc = cp.asarray(dm_sc.real, order='C')
 
     dm_sc = cell.apply_C_mat_CT(dm_sc.reshape(-1,nao,nao), out=out)
 
+    # Include the normalization when transforming to super-cell gamma-point dm
+    dm_sc *= 1. / nkpts
     if hermi == 1:
         dm_sc *= 2
 
@@ -1604,11 +1627,13 @@ def _inverse_wannier_transform_fock(ni, veff, kpts):
 
     bvk_ncells = len(ni.bvkmesh_Ls)
     if bvk_ncells != 1:
-        if kpts is not None and len(kpts) != bvk_ncells:
-            expLk = cp.exp(1j*cp.asarray(ni.bvkmesh_Ls).dot(cp.asarray(kpts).T))
+        kmesh, with_gamma_point = _get_kmesh(ni.cell, kpts, ni.bvkmesh)
+        if kmesh is not None:
+            expLk = fft_matrix(kmesh, with_gamma_point)
         else:
-            expLk = fft_matrix(ni.kmesh)
-        nkpts = expLk.shape[1]
+            # veff might be evaluated at arbitrary band points
+            expLk = cp.exp(1j * cp.asarray(ni.bvkmesh_Ls).dot(cp.asarray(kpts).T))
+        nkpts = len(kpts)
         expLkz = expLk.view(np.float64).reshape(bvk_ncells, nkpts, 2)
         veff = contract('Lpq,Lkz->kpqz', veff, expLkz)
         veff = veff.view(np.complex128)[:,:,:,0]
@@ -1630,6 +1655,7 @@ def get_rho(ni, dm_kpts, kpts=None):
             k points. If not specified, gamma point is assumed
     '''
     assert dm_kpts.ndim < 4
+    kpts, _ = _normalize_kpts(kpts)
     cell = ni.cell
     mesh = ni.mesh
 
@@ -1645,19 +1671,23 @@ def get_rho(ni, dm_kpts, kpts=None):
     return rhoR
 
 def get_nuc(ni, kpts=None):
+    """Get the periodic nuc-el AO matrix, with G=0 removed.
+
+    kpts follows the PySCF kpts convention; see
+    gpu4pyscf.pbc.lib.kpts_helper._normalize_kpts.
+    """
     cell = ni.cell
-    is_single_kpt = kpts is not None and kpts.ndim == 1
-    if kpts is None:
-        kpts = np.zeros((1, 3))
-    else:
-        kpts = kpts.reshape(-1, 3)
+    kpts, is_single_kpt = _normalize_kpts(kpts)
 
     ni._ensure_initialized(kpts, 'LDA')
 
     mesh = ni.mesh
-    ZSI = _get_ZSI(cell, mesh)
-    Gv_bases = _get_Gv_bases(mesh, cell.reciprocal_vectors())
-    vneG = _get_coulomb_in_place(ZSI, Gv_bases)[1]
+    if cell.dimension == 2:
+        vneG = multigrid_v1.eval_nucG(cell, mesh).reshape(mesh)
+    else:
+        ZSI = _get_ZSI(cell, mesh)
+        Gv_bases = _get_Gv_bases(mesh, cell.reciprocal_vectors())
+        vneG = _get_coulomb_in_place(cell, ZSI, Gv_bases)[1]
 
     vne = _eval_xc_mat(ni, vneG)
     vne = _inverse_wannier_transform_fock(ni, vne, kpts)
@@ -1667,16 +1697,15 @@ def get_nuc(ni, kpts=None):
 
 def get_pp(ni, kpts=None):
     """Get the periodic pseudopotential nuc-el AO matrix, with G=0 removed.
+
+    kpts follows the PySCF kpts convention; see
+    gpu4pyscf.pbc.lib.kpts_helper._normalize_kpts.
     """
     cell = ni.cell
     log = logger.new_logger(cell)
     t0 = log.init_timer()
 
-    is_single_kpt = kpts is not None and kpts.ndim == 1
-    if kpts is None:
-        kpts = np.zeros((1, 3))
-    else:
-        kpts = kpts.reshape(-1, 3)
+    kpts, is_single_kpt = _normalize_kpts(kpts)
 
     ni._ensure_initialized(kpts, 'LDA')
 
@@ -1688,9 +1717,9 @@ def get_pp(ni, kpts=None):
     vpp = _inverse_wannier_transform_fock(ni, vpp, kpts)
     t1 = log.timer_debug1("vpploc", *t0)
 
-    vppnl = get_pp_nl_gpu(cell, kpts)
-    if kpts is None or is_zero(kpts):
-        vpp += vppnl[0].real
+    vppnl = get_pp_nl(cell, kpts)
+    if is_zero(kpts):
+        vpp += vppnl.real
     else:
         vpp += vppnl
 
@@ -1730,7 +1759,10 @@ def nr_rks(ni, cell, grids, xc_code, dm_kpts, relativity=0, hermi=1,
     Args:
         dm_kpts : (nkpts, nao, nao) ndarray or a list of (nkpts,nao,nao) ndarray
             Density matrix at each k-point.
-        kpts : (nkpts, 3) ndarray
+        kpts : None, (3,) or (nkpts, 3) ndarray, or KPoints
+            Follows the PySCF kpts convention; see
+            gpu4pyscf.pbc.lib.kpts_helper._normalize_kpts.
+            Without kpts_band, the output matrix retains the shape of dm_kpts.
 
     Kwargs:
         kpts_band : ``(3,)`` ndarray or ``(*,3)`` ndarray
@@ -1746,6 +1778,9 @@ def nr_rks(ni, cell, grids, xc_code, dm_kpts, relativity=0, hermi=1,
     '''
     log = logger.new_logger(cell, verbose)
     t0 = log.init_timer()
+
+    input_kpts = kpts
+    kpts, _ = _normalize_kpts(kpts)
 
     xctype = ni._xc_type(xc_code)
     nvar = _xc_var_length(xctype)
@@ -1766,7 +1801,7 @@ def nr_rks(ni, cell, grids, xc_code, dm_kpts, relativity=0, hermi=1,
 
     if xctype == 'HF':
         assert with_j
-        ecoul, coulomb_on_g_mesh = _get_coulomb_in_place(rhoG, Gv_bases)
+        ecoul, coulomb_on_g_mesh = _get_coulomb_in_place(cell, rhoG, Gv_bases)
         ecoul = (.5 / vol) * float(ecoul.get())
         xc_for_fock = coulomb_on_g_mesh
         log.debug('Multigrid Coulomb energy %s', ecoul)
@@ -1804,7 +1839,7 @@ def nr_rks(ni, cell, grids, xc_code, dm_kpts, relativity=0, hermi=1,
         t0 = log.timer_debug1("eval_xc_eff", *t0)
 
         if with_j:
-            ecoul, coulomb_on_g_mesh = _get_coulomb_in_place(rhoG, Gv_bases)
+            ecoul, coulomb_on_g_mesh = _get_coulomb_in_place(cell, rhoG, Gv_bases)
             ecoul = (.5 / vol) * float(ecoul.get())
             log.debug('Multigrid Coulomb energy %s', ecoul)
         else:
@@ -1823,16 +1858,16 @@ def nr_rks(ni, cell, grids, xc_code, dm_kpts, relativity=0, hermi=1,
         veff = _eval_xc_mat(ni, xc_for_fock, out=dm_sc)
         veff = _inverse_wannier_transform_fock(ni, veff, kpts)
     else:
-        kpts_band = kpts_band.reshape(-1, 3)
-        kmesh = k2gamma.kpts_to_kmesh(cell, kpts_band)
-        ni = ni.copy().reset().build(kmesh=kmesh, xctype=xctype)
+        kpts_band, _ = _normalize_kpts(kpts_band)
+        bvkmesh = kpts_to_bvkmesh(cell, kpts_band, bound_by_supmol=True)
+        ni = ni.copy().reset().build(bvkmesh=bvkmesh, xctype=xctype)
         # ni.build may alter the mesh. vxc was created with mesh different to
         # this new mesh.
         ni.mesh = mesh
         veff = _eval_xc_mat(ni, xc_for_fock)
         veff = _inverse_wannier_transform_fock(ni, veff, kpts_band)
 
-    veff = _format_jks(veff, dm_kpts, kpts_band, kpts)
+    veff = _format_jks(veff, dm_kpts, kpts_band, input_kpts)
     veff = tag_array(veff, ecoul=ecoul, exc=xc_energy_sum)
     t0 = log.timer_debug1("xc matrix", *t0)
     return n_electrons, xc_energy_sum, veff
@@ -1845,7 +1880,10 @@ def nr_uks(ni, cell, grids, xc_code, dm_kpts, relativity=0, hermi=1,
     Args:
         dm_kpts : (nkpts, nao, nao) ndarray or a list of (nkpts,nao,nao) ndarray
             Density matrix at each k-point.
-        kpts : (nkpts, 3) ndarray
+        kpts : None, (3,) or (nkpts, 3) ndarray, or KPoints
+            Follows the PySCF kpts convention; see
+            gpu4pyscf.pbc.lib.kpts_helper._normalize_kpts.
+            Without kpts_band, the output matrix retains the shape of dm_kpts.
 
     Kwargs:
         kpts_band : ``(3,)`` ndarray or ``(*,3)`` ndarray
@@ -1862,16 +1900,19 @@ def nr_uks(ni, cell, grids, xc_code, dm_kpts, relativity=0, hermi=1,
     log = logger.new_logger(cell, verbose)
     t0 = log.init_timer()
 
+    input_kpts = kpts
+    kpts, _ = _normalize_kpts(kpts)
+
     xctype = ni._xc_type(xc_code)
     nvar = _xc_var_length(xctype)
     if xctype == 'HF':
         if with_j:
-            vj = ni.get_j(dm_kpts[0]+dm_kpts[1], hermi, kpts, kpts_band)
+            vj = ni.get_j(dm_kpts[0]+dm_kpts[1], hermi, input_kpts, kpts_band)
             veff = cp.stack([vj, vj])
-            return lib.tag_array(veff, ecoul=vj.ecoul, exc=0)
+            return tag_array(veff, ecoul=vj.ecoul, exc=0)
         else:
             veff = cp.zeros_like(dm_kpts)
-            return lib.tag_array(veff, ecoul=0, exc=0)
+            return tag_array(veff, ecoul=0, exc=0)
 
     dm_sc = _wannier_transform_dm(ni, dm_kpts, kpts, hermi, xctype)
     assert len(dm_sc) == 2
@@ -1927,7 +1968,7 @@ def nr_uks(ni, cell, grids, xc_code, dm_kpts, relativity=0, hermi=1,
     xc_for_fock *= weight
     coulomb_a, coulomb_b = rhoG, rhoGb
     if with_j:
-        ecoul, coulomb_a = _get_coulomb_in_place(rhoG, Gv_bases)
+        ecoul, coulomb_a = _get_coulomb_in_place(cell, rhoG, Gv_bases)
         ecoul = (.5 / vol) * float(ecoul.get())
         log.debug('Multigrid Coulomb energy %s', ecoul)
         coulomb_b[:] = coulomb_a
@@ -1953,9 +1994,9 @@ def nr_uks(ni, cell, grids, xc_code, dm_kpts, relativity=0, hermi=1,
             _inverse_wannier_transform_fock(ni, veff_b, kpts)])
 
     else:
-        kpts_band = kpts_band.reshape(-1, 3)
-        kmesh = k2gamma.kpts_to_kmesh(cell, kpts_band)
-        ni = ni.copy().reset().build(kmesh=kmesh, xctype=xctype)
+        kpts_band, _ = _normalize_kpts(kpts_band)
+        bvkmesh = kpts_to_bvkmesh(cell, kpts_band, bound_by_supmol=True)
+        ni = ni.copy().reset().build(bvkmesh=bvkmesh, xctype=xctype)
         # ni.build may alter the mesh. vxc was created with mesh different to
         # this new mesh.
         ni.mesh = mesh
@@ -1965,7 +2006,7 @@ def nr_uks(ni, cell, grids, xc_code, dm_kpts, relativity=0, hermi=1,
             _inverse_wannier_transform_fock(ni, veff_a, kpts_band),
             _inverse_wannier_transform_fock(ni, veff_b, kpts_band)])
 
-    veff = _format_jks(veff, dm_kpts, kpts_band, kpts)
+    veff = _format_jks(veff, dm_kpts, kpts_band, input_kpts)
     veff = tag_array(veff, ecoul=ecoul, exc=xc_energy_sum)
     t0 = log.timer_debug1("xc matrix", *t0)
     return n_electrons, xc_energy_sum, veff
@@ -2022,9 +2063,11 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
         self.aft_buckets = None
         self.fft_buckets = None
         self.xctype = None
+        self._lattice_vectors = None
+        self._reciprocal_lattice_vectors = None
         return self
 
-    def build(self, kmesh=None, xctype='MGGA'):
+    def build(self, bvkmesh=None, xctype='MGGA'):
         log = logger.new_logger(self.cell)
         t0 = log.init_timer()
         cell = self.sorted_cell = SortedGTO.from_cell(
@@ -2032,15 +2075,15 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
         assert cell.uniq_l_ctr[:,0].max() <= LMAX
 
         self.xctype = xctype
-        self.kmesh = kmesh
-        if kmesh is None:
+        self.bvkmesh = bvkmesh
+        if bvkmesh is None:
             bvkcell = cell
             bvkmesh_Ls = np.zeros((1, 3))
         else:
-            bvkcell = super_cell(cell, kmesh, wrap_around=True)
+            bvkcell = super_cell(cell, bvkmesh, wrap_around=True)
             # PTR_BAS_COORD was not initialized in the super_cell function
             bvkcell._bas[:,PTR_BAS_COORD] = bvkcell._atm[bvkcell._bas[:,ATOM_OF],PTR_COORD]
-            bvkmesh_Ls = translation_vectors_for_kmesh(cell, kmesh, wrap_around=True)
+            bvkmesh_Ls = translation_vectors_for_kmesh(cell, bvkmesh, wrap_around=True)
         self.bvkcell = bvkcell
         self.bvkmesh_Ls = bvkmesh_Ls
         bvk_ncells = len(bvkmesh_Ls)
@@ -2055,9 +2098,11 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
             cell.natm, cell.nbas, bvk_ncells, nimgs,
             bvkcell._atm, bvkcell._bas, _env, ao_loc, Ls)
 
-        a = cell.lattice_vectors()
-        b = cell.reciprocal_vectors(norm_to=1)
-        libmgrid.update_lattice_vectors(a.ctypes, b.ctypes)
+        # Retain the host sources for asynchronous symbol copies.
+        a = self._lattice_vectors = cell.lattice_vectors()
+        b = self._reciprocal_lattice_vectors = cell.reciprocal_vectors(norm_to=1)
+        libmgrid.update_lattice_vectors(
+            a.ctypes, b.ctypes, ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
 
         # a penalty to encounter for lattice sum
         rad = cell.rcut / bvkcell.vol**(1./3) + 1
@@ -2126,13 +2171,13 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
         return self
 
     def _ensure_initialized(self, kpts, xctype):
-        kmesh = k2gamma.kpts_to_kmesh(self.cell, kpts)
+        bvkmesh = kpts_to_bvkmesh(self.cell, kpts, bound_by_supmol=True)
         if (self.bvkcell is None or
-            any(self.kmesh != kmesh) or
+            any(self.bvkmesh != bvkmesh) or
             # LDA and GGA share the same initialization parameters.
             # MGGA requires a little bit higher energy cutoff and rcut
             (xctype == 'MGGA' and self.xctype != xctype)):
-            self.build(kmesh, xctype)
+            self.build(bvkmesh, xctype)
         return self
 
     get_nuc = get_nuc
@@ -2158,7 +2203,7 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
                    kpts=None, with_j=False):
         if isinstance(kpts, KPoints):
             kpts = kpts.kpts_ibz
-        assert kpts is None or kpts.ndim == 2
+        kpts, _ = _normalize_kpts(kpts)
 
         assert dms.ndim == 4
         n_dm, nkpts, nao = dms.shape[:3]
@@ -2187,11 +2232,11 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
                 dm_sc = None
 
             # rho1 has been scaled by (ngrids/cell.vol)
-            wv = einsum('xg,xyg->yg', rho1, fxc).reshape(nvar, *mesh)
+            wv = cp.einsum('xg,xyg->yg', rho1, fxc).reshape(nvar, *mesh)
             rho1 = None
 
             if with_j:
-                coulomb = _get_coulomb_in_place(rhoG, Gv_bases)[1]
+                coulomb = _get_coulomb_in_place(cell, rhoG, Gv_bases)[1]
             else:
                 coulomb = rhoG
                 coulomb.fill(0.)
@@ -2220,7 +2265,7 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
                    kpts=None, with_j=False):
         if isinstance(kpts, KPoints):
             kpts = kpts.kpts_ibz
-        assert kpts is None or kpts.ndim == 2
+        kpts, _ = _normalize_kpts(kpts)
 
         assert dms.ndim == 5
         n_dm, nkpts, nao = dms.shape[1:4]
@@ -2252,14 +2297,15 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
             rhoG += rhoGb
             tauG = tauGb = None # release memory
             if dm_sc.nbytes * 10 > mem:
-                dm_sc = None
+                # Keep one optional output buffer per spin after releasing the DM.
+                dm_sc = [None, None]
 
-            wv = einsum('axg,axbyg->byg', rho1, fxc).reshape(2, nvar, *mesh)
+            wv = cp.einsum('axg,axbyg->byg', rho1, fxc).reshape(2, nvar, *mesh)
             rho1 = None
 
             coulomb_a, coulomb_b = rhoG, rhoGb
             if with_j:
-                coulomb_a = _get_coulomb_in_place(rhoG, Gv_bases)[1]
+                coulomb_a = _get_coulomb_in_place(cell, rhoG, Gv_bases)[1]
                 coulomb_b[:] = coulomb_a
             else:
                 coulomb_a.fill(0)
@@ -2281,7 +2327,7 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
     def cache_xc_kernel1(self, cell, grids, xc_code, dm, spin=0, kpts=None, is_rhf=None):
         if isinstance(kpts, KPoints):
             kpts = kpts.kpts_ibz
-        assert kpts is None or kpts.ndim == 2
+        kpts, _ = _normalize_kpts(kpts)
 
         xctype = self._xc_type(xc_code)
         nvar = _xc_var_length(xctype)
@@ -2368,6 +2414,7 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
                 Whether to include the contribution from the local part of
                 pseudo-potential or electron-nuclear Coulomb interactions
         '''
+        kpts, _ = _normalize_kpts(kpts)
         cell = self.cell
         log = logger.new_logger(cell)
         t0 = log.init_timer()
@@ -2443,7 +2490,7 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
             vxc = vxc.reshape(n_dm, nvar, ngrids)
             density = density.reshape(n_dm, nvar, ngrids)
             for s in range(n_dm):
-                sigma -= einsum('xg,yg->xy', density[s,1:4], vxc[s,1:4])
+                sigma -= cp.einsum('xg,yg->xy', density[s,1:4], vxc[s,1:4])
 
         vxc = vxc.reshape(n_dm, nvar, *mesh)
 
@@ -2457,7 +2504,7 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
             else:
                 grad_sigma += _ne_derivatives(cell, rhoG, Gv_bases)
                 ZSI = _get_ZSI(cell, mesh, out=tauG)
-                vneG = _get_coulomb_in_place(ZSI, Gv_bases)[1]
+                vneG = _get_coulomb_in_place(cell, ZSI, Gv_bases)[1]
                 coulomb_on_g_mesh = vneG.reshape(mesh)
                 ZSI = vneG = None
 
@@ -2465,7 +2512,7 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
             sigma += _coulomb_strain_derivatives(cell, mesh, rhoG, Gv_bases) * 0.5
             # rhoG will be overwritten by _get_coulomb_in_place. Must be called
             # after other operations.
-            ecoul, coulomb_on_g_mesh1 = _get_coulomb_in_place(rhoG, Gv_bases)
+            ecoul, coulomb_on_g_mesh1 = _get_coulomb_in_place(cell, rhoG, Gv_bases)
             ecoul = (.5 / vol) * ecoul
             # grid weight response
             sigma += ecoul * cp.eye(3)
@@ -2504,5 +2551,15 @@ class MultiGridNumInt(multigrid_v1.MultiGridNumIntBase):
         t0 = log.timer("xc integration", *t0)
         return grad_sigma.get()
 
-    to_cpu = NotImplemented
+    if cp.cuda.runtime.is_hip:
+        def to_cpu(self):
+            # No GPU libXC on HIP: the XC-on-CPU fallback in gpu4pyscf/dft/numint.py
+            # calls to_cpu().eval_xc_eff(...). Supply a CPU numint for that without
+            # converting the multigrid machinery. On CUDA the integrator keeps
+            # upstream's behaviour and does not support conversion to CPU.
+            from pyscf.pbc.dft import numint as numint_cpu
+            return numint_cpu.NumInt()
+    else:
+        to_cpu = NotImplemented
+
     to_gpu = NotImplemented

@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if(NOT USE_HIP)
-  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --ptxas-options=-v")
-endif()
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --ptxas-options=-v")
 
 set(CMAKE_VERBOSE_MAKEFILE ON)
 add_library(gint SHARED 
@@ -44,8 +42,7 @@ add_library(gint SHARED
 #  set(BUILD_SHARED_LIBS 0)
 #endif()
 
-g4p_set_hip_language(gint)
 set_target_properties(gint PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}
-  CUDA_SEPARABLE_COMPILATION ON
-  HIP_SEPARABLE_COMPILATION ON)
+  CUDA_SEPARABLE_COMPILATION ON)
+gpu4pyscf_configure_gpu_target(gint)

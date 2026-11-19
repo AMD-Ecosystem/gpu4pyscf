@@ -22,7 +22,7 @@ import scipy.linalg
 import cupy
 from pyscf import lib
 from gpu4pyscf.lib import logger
-from gpu4pyscf.lib.cutensor import contract, _hip_einsum
+from gpu4pyscf.lib.cutensor import contract
 from gpu4pyscf.lib import cusolver
 from gpu4pyscf.lib.memcpy import copy_array, p2p_transfer  #NOQA
 from gpu4pyscf.lib import multi_gpu
@@ -40,29 +40,13 @@ SCIPY_EIGH_FOR_LARGE_ARRAYS = True
 
 _kernel_registery = {}
 
-# Definitions that let the RawKernel sources written for CUDA compile with
-# hiprtc. hiprtc has no cuComplex.h, and HIP's __shfl_down_sync takes a 64-bit
-# lane mask. The kernels reduce over 32-lane groups (lane = tid % 32) with the
-# 32-bit full mask; the 32-lane width keeps each reduction inside its group on
-# wave64 as well.
-_HIP_KERNEL_PREAMBLE = r'''
-#include <hip/hip_complex.h>
-typedef hipDoubleComplex cuDoubleComplex;
-#define make_cuDoubleComplex make_hipDoubleComplex
-#define cuCreal hipCreal
-#define cuCimag hipCimag
-#define __shfl_down_sync(mask, var, delta) __shfl_down(var, delta, 32)
-'''
-
-def kernel_source(code):
-    '''Adapt a CUDA RawKernel source for hiprtc when running on ROCm'''
-    if cupy.cuda.runtime.is_hip:
-        code = _HIP_KERNEL_PREAMBLE + code.replace('#include <cuComplex.h>', '')
-    return code
-
-einsum = _hip_einsum if cupy.cuda.runtime.is_hip else cupy.einsum
-
 libcupy_helper = load_library('libcupy_helper')
+
+# The grouped_gemm/grouped_dot kernels are provided by CUTLASS, which is
+# NVIDIA-only and not built on ROCm/HIP (BUILD_CUTLASS=OFF). Detect whether the
+# compiled entry points are present; if not, fall back to a portable CuPy
+# implementation (see grouped_dot/grouped_gemm below).
+_has_cutlass_grouped = hasattr(libcupy_helper, 'grouped_dot')
 
 pinned_memory_pool = cupy.cuda.PinnedMemoryPool()
 cupy.cuda.set_pinned_memory_allocator(pinned_memory_pool.malloc)
@@ -73,22 +57,13 @@ def pin_memory(array):
     ret[...] = array
     return ret
 
-@functools.lru_cache
-def _hip_device_set_limit():
-    # libamdhip64 is already loaded by CuPy; its soname carries the HIP major
-    # version reported by the runtime.
-    major = cupy.cuda.runtime.runtimeGetVersion() // 10000000
-    fn = ctypes.CDLL(f'libamdhip64.so.{major}').hipDeviceSetLimit
-    fn.argtypes = (ctypes.c_int, ctypes.c_size_t)
-    return fn
-
 def release_gpu_stack():
+    # Shrinks the per-thread device stack (cudaLimitStackSize) to reclaim memory.
+    # HIP/ROCm does not support this limit the same way (hipErrorUnknown), so it
+    # is a no-op there; skipping it only forgoes a memory optimization.
     if cupy.cuda.runtime.is_hip:
-        # CuPy's ROCm backend stubs deviceSetLimit to return hipErrorUnknown
-        # (cupy_backends/hip/cupy_hip_runtime.h), so call HIP directly.
-        cupy.cuda.runtime.check_status(_hip_device_set_limit()(0x00, 128))
-    else:
-        cupy.cuda.runtime.deviceSetLimit(0x00, 128)
+        return
+    cupy.cuda.runtime.deviceSetLimit(0x00, 128)
 
 def print_mem_info():
     mempool = cupy.get_default_memory_pool()
@@ -149,13 +124,13 @@ def device2host_2d(a_cpu, a_gpu, stream=None):
     if stream is None:
         stream = cupy.cuda.get_current_stream()
     libcupy_helper.async_d2h_2d(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         a_cpu.ctypes.data_as(ctypes.c_void_p),
         ctypes.c_int(a_cpu.strides[0]),
         ctypes.cast(a_gpu.data.ptr, ctypes.c_void_p),
         ctypes.c_int(a_gpu.strides[0]),
         ctypes.c_int(a_gpu.shape[0]),
-        ctypes.c_int(a_gpu.shape[1]))
+        ctypes.c_int(a_gpu.shape[1]),
+        ctypes.cast(stream.ptr, ctypes.c_void_p))
 
 # define cupy array with tags
 class CPArrayWithTag(cupy.ndarray):
@@ -198,7 +173,8 @@ def asarray(a, **kwargs):
         # cupy/_core/core.pyx, where memory buffer is allocated via
         # mem = _alloc_async_transfer_buffer(nbytes)
 
-        allow_fast_transfer = kwargs.get('dtype', a.dtype) == a.dtype
+        allow_fast_transfer = (kwargs.get('dtype', a.dtype) == a.dtype and
+                               'order' not in kwargs)
         # a must be C-contiguous or F-contiguous
         if not a.flags.c_contiguous and not a.flags.f_contiguous:
             allow_fast_transfer = False
@@ -251,10 +227,10 @@ def pack_tril(a, stream=None):
             stream = cupy.cuda.get_current_stream()
         a_tril = cupy.empty((counts, n*(n+1)//2), dtype=np.float64)
         err = libcupy_helper.pack_tril(
-            ctypes.cast(stream.ptr, ctypes.c_void_p),
             ctypes.cast(a_tril.data.ptr, ctypes.c_void_p),
             ctypes.cast(a.data.ptr, ctypes.c_void_p),
-            ctypes.c_int(n), ctypes.c_int(counts))
+            ctypes.c_int(n), ctypes.c_int(counts),
+            ctypes.cast(stream.ptr, ctypes.c_void_p))
         if err != 0:
             raise RuntimeError('pack_tril kernel failed')
 
@@ -282,17 +258,19 @@ def unpack_tril(cderi_tril, out=None, stream=None, hermi=1):
         else:
             raise NotImplementedError
         out [:,mask] = cderi_tril
+        if ndim == 1:
+            out = out[0]
         return out
 
     if stream is None:
         stream = cupy.cuda.get_current_stream()
     err = libcupy_helper.unpack_tril(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         ctypes.cast(cderi_tril.data.ptr, ctypes.c_void_p),
         ctypes.cast(out.data.ptr, ctypes.c_void_p),
         ctypes.c_int(nao),
         ctypes.c_int(count),
-        ctypes.c_int(hermi))
+        ctypes.c_int(hermi),
+        ctypes.cast(stream.ptr, ctypes.c_void_p))
     if err != 0:
         raise RuntimeError('failed in unpack_tril kernel')
     if ndim == 1:
@@ -329,7 +307,6 @@ def fill_symmetric(a, pair_addresses, nao, p0=0, p1=None, out=None, stream=None)
     if a.strides[-1] == 8: # a is in row major
         a_stride = a.strides[-2] // a.itemsize
         err = libcupy_helper.decompress_and_fill(
-            ctypes.cast(stream.ptr, ctypes.c_void_p),
             ctypes.cast(out.data.ptr, ctypes.c_void_p),
             ctypes.c_int(out_stride),
             ctypes.cast(a.data.ptr, ctypes.c_void_p),
@@ -337,19 +314,20 @@ def fill_symmetric(a, pair_addresses, nao, p0=0, p1=None, out=None, stream=None)
             ctypes.c_int(len(pair_addresses)),
             ctypes.c_int(nao),
             ctypes.c_int(a_stride),
-            ctypes.c_int(p0), ctypes.c_int(p1))
+            ctypes.c_int(p0), ctypes.c_int(p1),
+            ctypes.cast(stream.ptr, ctypes.c_void_p))
         if err != 0:
             raise RuntimeError('decompress_and_fill failed')
     else: # a is in column major
         err = libcupy_helper.decompress_and_transpose(
-            ctypes.cast(stream.ptr, ctypes.c_void_p),
             ctypes.cast(out.data.ptr, ctypes.c_void_p),
             ctypes.c_int(out_stride), ctypes.cast(a.data.ptr, ctypes.c_void_p),
             ctypes.cast(pair_addresses.data.ptr, ctypes.c_void_p),
             ctypes.c_int(len(pair_addresses)),
             ctypes.c_int(nao),
             ctypes.c_int(p0), ctypes.c_int(p1),
-            ctypes.c_int(1), ctypes.c_int(0))
+            ctypes.c_int(1), ctypes.c_int(0),
+            ctypes.cast(stream.ptr, ctypes.c_void_p))
         if err != 0:
             raise RuntimeError('decompress_and_transpose failed')
     return out
@@ -375,13 +353,13 @@ def add_sparse(a, b, indices):
 
     stream = cupy.cuda.get_current_stream()
     err = libcupy_helper.add_sparse(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         ctypes.cast(a.data.ptr, ctypes.c_void_p),
         ctypes.cast(b.data.ptr, ctypes.c_void_p),
         ctypes.cast(indices.data.ptr, ctypes.c_void_p),
         ctypes.c_int(n),
         ctypes.c_int(m),
-        ctypes.c_int(count)
+        ctypes.c_int(count),
+        ctypes.cast(stream.ptr, ctypes.c_void_p)
     )
     if err != 0:
         raise RuntimeError('failed in sparse_add2d')
@@ -400,12 +378,12 @@ def dist_matrix(x, y, out=None):
 
     stream = cupy.cuda.get_current_stream()
     err = libcupy_helper.dist_matrix(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         ctypes.cast(out.data.ptr, ctypes.c_void_p),
         ctypes.cast(x.data.ptr, ctypes.c_void_p),
         ctypes.cast(y.data.ptr, ctypes.c_void_p),
         ctypes.c_int(m),
-        ctypes.c_int(n)
+        ctypes.c_int(n),
+        ctypes.cast(stream.ptr, ctypes.c_void_p)
     )
     if err != 0:
         raise RuntimeError('failed in calculating distance matrix')
@@ -446,7 +424,6 @@ def block_c2s_diag(angular, counts):
 
     stream = cupy.cuda.get_current_stream()
     err = libcupy_helper.block_diag(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         ctypes.cast(cart2sph.data.ptr, ctypes.c_void_p),
         ctypes.c_int(ncart),
         ctypes.c_int(nsph),
@@ -455,28 +432,35 @@ def block_c2s_diag(angular, counts):
         ctypes.cast(offsets.data.ptr, ctypes.c_void_p),
         ctypes.cast(rows.data.ptr, ctypes.c_void_p),
         ctypes.cast(cols.data.ptr, ctypes.c_void_p),
+        ctypes.cast(stream.ptr, ctypes.c_void_p),
     )
     if err != 0:
         raise RuntimeError('failed in block_diag kernel')
     return cart2sph
 
 def block_diag(blocks, out=None):
-    '''
-    each block size is up to 16x16
+    '''Construct a block-diagonal array, preserving the input result dtype.
+
+    A supplied output buffer is filled with the complete block-diagonal matrix.
     '''
     rows = np.cumsum(np.asarray([0] + [x.shape[0] for x in blocks]))
     cols = np.cumsum(np.asarray([0] + [x.shape[1] for x in blocks]))
     offsets = np.cumsum(np.asarray([0] + [x.shape[0]*x.shape[1] for x in blocks]))
 
     m, n = rows[-1], cols[-1]
-    if out is None: out = cupy.zeros([m, n])
+    dtype = np.result_type(*blocks)
+    out = ndarray([m, n], dtype=dtype, buffer=out)
+    out.fill(0.)
+    if dtype != np.float64:
+        for block, r0, r1, c0, c1 in zip(blocks, rows[:-1], rows[1:], cols[:-1], cols[1:]):
+            out[r0:r1,c0:c1] = block
+        return out
     rows = cupy.asarray(rows, dtype='int32')
     cols = cupy.asarray(cols, dtype='int32')
     offsets = cupy.asarray(offsets, dtype='int32')
     data = cupy.concatenate([x.ravel() for x in blocks])
     stream = cupy.cuda.get_current_stream()
     err = libcupy_helper.block_diag(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         ctypes.cast(out.data.ptr, ctypes.c_void_p),
         ctypes.c_int(m),
         ctypes.c_int(n),
@@ -485,6 +469,7 @@ def block_diag(blocks, out=None):
         ctypes.cast(offsets.data.ptr, ctypes.c_void_p),
         ctypes.cast(rows.data.ptr, ctypes.c_void_p),
         ctypes.cast(cols.data.ptr, ctypes.c_void_p),
+        ctypes.cast(stream.ptr, ctypes.c_void_p),
     )
     if err != 0:
         raise RuntimeError('failed in block_diag kernel')
@@ -510,13 +495,13 @@ def take_last2d(a, indices, out=None):
     indices_int32 = cupy.asarray(indices, dtype='int32')
     stream = cupy.cuda.get_current_stream()
     err = libcupy_helper.take_last2d(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         ctypes.cast(out.data.ptr, ctypes.c_void_p),
         ctypes.cast(a.data.ptr, ctypes.c_void_p),
         ctypes.cast(indices_int32.data.ptr, ctypes.c_void_p),
         ctypes.c_int(count),
         ctypes.c_int(nidx),
-        ctypes.c_int(nao)
+        ctypes.c_int(nao),
+        ctypes.cast(stream.ptr, ctypes.c_void_p)
     )
     if err != 0:
         raise RuntimeError('failed in take_last2d kernel')
@@ -542,10 +527,10 @@ def takebak(out, a, indices, axis=-1):
     indices_int32 = cupy.asarray(indices, dtype=cupy.int32)
     stream = cupy.cuda.get_current_stream()
     err = libcupy_helper.takebak(
-        ctypes.c_void_p(stream.ptr),
         ctypes.c_void_p(out.data.ptr), a.ctypes,
         ctypes.c_void_p(indices_int32.data.ptr),
-        ctypes.c_int(count), ctypes.c_int(n_o), ctypes.c_int(n_a)
+        ctypes.c_int(count), ctypes.c_int(n_o), ctypes.c_int(n_a),
+        ctypes.c_void_p(stream.ptr)
     )
     if err != 0: # Not the mapped host memory
         out[...,indices] = cupy.asarray(a)
@@ -554,8 +539,8 @@ def takebak(out, a, indices, axis=-1):
 def transpose_sum(a, stream=None, inplace=True, hermi=1):
     '''
     perform
-    a + a.transpose(0,2,1) for hermi=1 or
-    a - a.transpose(0,2,1) hermi=2
+    a + a.transpose(0,2,1).conj() for hermi=1 or
+    a - a.transpose(0,2,1).conj() hermi=2
     inplace
     '''
     if not inplace:
@@ -575,9 +560,9 @@ def transpose_sum(a, stream=None, inplace=True, hermi=1):
         fn = libcupy_helper.transpose_dsum
     else:
         fn = libcupy_helper.transpose_zsum
-    err = fn(ctypes.cast(stream.ptr, ctypes.c_void_p),
-             ctypes.cast(a.data.ptr, ctypes.c_void_p),
-             ctypes.c_int(n), ctypes.c_int(count), ctypes.c_int(hermi))
+    err = fn(ctypes.cast(a.data.ptr, ctypes.c_void_p),
+             ctypes.c_int(n), ctypes.c_int(count), ctypes.c_int(hermi),
+             ctypes.cast(stream.ptr, ctypes.c_void_p))
     if err != 0:
         raise RuntimeError('failed in transpose_sum kernel')
     if ndim == 2:
@@ -615,10 +600,10 @@ def hermi_triu(mat, hermi=1, inplace=True, stream=None):
     if stream is None:
         stream = cupy.cuda.get_current_stream()
     err = libcupy_helper.fill_triu(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         ctypes.cast(mat.data.ptr, ctypes.c_void_p),
         ctypes.c_int(n), ctypes.c_int(counts), ctypes.c_int(hermi),
-        ctypes.c_int(dtype))
+        ctypes.c_int(dtype),
+        ctypes.cast(stream.ptr, ctypes.c_void_p))
     if err != 0:
         raise RuntimeError('hermi_triu kernel failed')
     return mat
@@ -635,11 +620,11 @@ def copy_symmetric(a, i_addr, j_addr, stream=None):
     i_addr = cupy.asarray(i_addr, dtype=np.int32)
     j_addr = cupy.asarray(j_addr, dtype=np.int32)
     err = libcupy_helper.copy_symmetric(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         ctypes.cast(a.data.ptr, ctypes.c_void_p),
         ctypes.cast(i_addr.data.ptr, ctypes.c_void_p),
         ctypes.cast(j_addr.data.ptr, ctypes.c_void_p),
-        ctypes.c_int(npairs), ctypes.c_int(N1), ctypes.c_int(N2))
+        ctypes.c_int(npairs), ctypes.c_int(N1), ctypes.c_int(N2),
+        ctypes.cast(stream.ptr, ctypes.c_void_p))
     if err != 0:
         raise RuntimeError('copy_symmetric kernel failed')
     return a
@@ -655,12 +640,12 @@ def scatter_add(a, idx, b, alpha=1, stream=None):
         ncol *= 2
     idx = cupy.asarray(idx, dtype=np.int32)
     err = libcupy_helper.scatter_add(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         ctypes.cast(a.data.ptr, ctypes.c_void_p),
         ctypes.cast(b.data.ptr, ctypes.c_void_p),
         ctypes.cast(idx.data.ptr, ctypes.c_void_p),
         ctypes.c_double(alpha),
-        ctypes.c_int(nrow), ctypes.c_int(ncol))
+        ctypes.c_int(nrow), ctypes.c_int(ncol),
+        ctypes.cast(stream.ptr, ctypes.c_void_p))
     if err != 0:
         raise RuntimeError('scatter_add kernel failed')
     return a
@@ -692,12 +677,12 @@ def cart2sph(t, axis=0, ang=1, out=None, stream=None):
     if stream is None:
         stream = cupy.cuda.get_current_stream()
     err = libcupy_helper.cart2sph(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         ctypes.cast(t_cart.data.ptr, ctypes.c_void_p),
         ctypes.cast(out.data.ptr, ctypes.c_void_p),
         ctypes.c_int(i3),
         ctypes.c_int(count),
-        ctypes.c_int(ang)
+        ctypes.c_int(ang),
+        ctypes.cast(stream.ptr, ctypes.c_void_p)
     )
     if err != 0:
         raise RuntimeError('failed in cart2sph kernel')
@@ -757,7 +742,11 @@ def krylov(aop, b, x0=None, tol=1e-10, max_cycle=30, dot=cupy.dot,
     nroots, ndim = x1.shape
     x1, rmat = _stable_qr(x1, cupy.dot, lindep=lindep)
     if len(x1) == 0:
-        return cupy.zeros_like(b)
+        # A zero residual means a supplied initial guess is already a solution.
+        if x0 is None:
+            return cupy.zeros_like(b)
+        else:
+            return x0
 
     x1 *= rmat.diagonal()[:,None]
 
@@ -987,7 +976,7 @@ def cond(a, sympos=False, verbose=logger.WARN):
 
     else:
         if sympos:
-            s = cupy.linalg.eigvalsh(a)
+            s = cusolver.eigh_std(a)[0]
             if s[0] > 0:
                 return s[-1] / s[0]
             else:
@@ -1008,15 +997,16 @@ def grouped_dot(As, Bs, Cs=None):
     assert len(As) == len(Bs)
     assert As[0].flags.c_contiguous
     assert Bs[0].flags.c_contiguous
-    if cupy.cuda.runtime.is_hip:
-        # CUTLASS, which the grouped kernel is built on, has no ROCm port.
-        # Issue one GEMM per group instead.
-        if Cs is None:
-            return [a.dot(b.T) for a, b in zip(As, Bs)]
-        for a, b, c in zip(As, Bs, Cs):
-            cupy.dot(a, b.T, out=c)
-        return Cs
     groups = len(As)
+
+    if not _has_cutlass_grouped:
+        # Portable fallback (e.g. ROCm/HIP): einsum('ik,jk->ij', A, B) = A @ B.T
+        if Cs is None:
+            return [As[i] @ Bs[i].T for i in range(groups)]
+        for i in range(groups):
+            Cs[i][:] = As[i] @ Bs[i].T
+        return Cs
+
     Ms, Ns, Ks = [], [], []
     for a, b in zip(As, Bs):
         Ms.append(a.shape[0])
@@ -1057,7 +1047,6 @@ def grouped_dot(As, Bs, Cs=None):
 
     stream = cupy.cuda.get_current_stream()
     err = libcupy_helper.grouped_dot(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         ctypes.cast(Cs_ptr.ctypes.data, ctypes.c_void_p),
         ctypes.cast(As_ptr.ctypes.data, ctypes.c_void_p),
         ctypes.cast(Bs_ptr.ctypes.data, ctypes.c_void_p),
@@ -1065,7 +1054,8 @@ def grouped_dot(As, Bs, Cs=None):
         ctypes.cast(Ns.ctypes.data, ctypes.c_void_p),
         ctypes.cast(Ks.ctypes.data, ctypes.c_void_p),
         ctypes.cast(cutlass_space.data.ptr, ctypes.c_void_p),
-        ctypes.c_int(groups)
+        ctypes.c_int(groups),
+        ctypes.cast(stream.ptr, ctypes.c_void_p)
     )
     if err != 0:
         raise RuntimeError('failed in grouped_gemm kernel')
@@ -1084,15 +1074,16 @@ def grouped_gemm(As, Bs, Cs=None):
     assert len(As) == len(Bs)
     assert As[0].flags.c_contiguous
     assert Bs[0].flags.c_contiguous
-    if cupy.cuda.runtime.is_hip:
-        # CUTLASS, which the grouped kernel is built on, has no ROCm port.
-        # Issue one GEMM per group instead.
-        if Cs is None:
-            return [a.T.dot(b) for a, b in zip(As, Bs)]
-        for a, b, c in zip(As, Bs, Cs):
-            cupy.dot(a.T, b, out=c)
-        return Cs
     groups = len(As)
+
+    if not _has_cutlass_grouped:
+        # Portable fallback (e.g. ROCm/HIP): einsum('ki,kj->ij', A, B) = A.T @ B
+        if Cs is None:
+            return [As[i].T @ Bs[i] for i in range(groups)]
+        for i in range(groups):
+            Cs[i][:] = As[i].T @ Bs[i]
+        return Cs
+
     Ms, Ns, Ks = [], [], []
     for a, b in zip(As, Bs):
         Ms.append(a.shape[1])
@@ -1119,14 +1110,14 @@ def grouped_gemm(As, Bs, Cs=None):
 
     stream = cupy.cuda.get_current_stream()
     err = libcupy_helper.grouped_gemm(
-        ctypes.cast(stream.ptr, ctypes.c_void_p),
         ctypes.cast(Cs_ptr.ctypes.data, ctypes.c_void_p),
         ctypes.cast(As_ptr.ctypes.data, ctypes.c_void_p),
         ctypes.cast(Bs_ptr.ctypes.data, ctypes.c_void_p),
         ctypes.cast(Ms.ctypes.data, ctypes.c_void_p),
         ctypes.cast(Ns.ctypes.data, ctypes.c_void_p),
         ctypes.cast(Ks.ctypes.data, ctypes.c_void_p),
-        ctypes.c_int(groups)
+        ctypes.c_int(groups),
+        ctypes.cast(stream.ptr, ctypes.c_void_p)
     )
     if err != 0:
         raise RuntimeError('failed in grouped_gemm kernel')
@@ -1196,12 +1187,13 @@ def condense(opname, a, loc_x, loc_y=None):
             code = 'val += a[ip*nj+jp];'
             result_code = 'val'
         elif opname == 'max':
-            init_code = '0'
-            code = 'double tmp = a[ip*nj+jp]; val = (val > tmp) ? val : tmp;'
+            # Seed nonempty extrema from data; zero biases all-negative maxima.
+            init_code = '(i0 < i1 && j0 < j1) ? a[i0*nj+j0] : 0'
+            code = 'double tmp = a[ip*nj+jp]; val = max(val, tmp);'
             result_code = 'val'
         elif opname == 'min':
-            init_code = '0'
-            code = 'double tmp = a[ip*nj+jp]; val = (val < tmp) ? val : tmp;'
+            init_code = '(i0 < i1 && j0 < j1) ? a[i0*nj+j0] : 0'
+            code = 'double tmp = a[ip*nj+jp]; val = min(val, tmp);'
             result_code = 'val'
         elif opname == 'abssum':
             init_code = '0'
@@ -1214,7 +1206,7 @@ def condense(opname, a, loc_x, loc_y=None):
         elif opname == 'norm':
             init_code = '0'
             code = 'double tmp = a[ip*nj+jp]; val += tmp * tmp;'
-            result_code = 'fsqrt(val)'
+            result_code = 'sqrt(val)'
 
         kernel_code = ('''\
 extern "C" __global__
@@ -1307,6 +1299,9 @@ def vec_dot(vec1, vec2):
     vec2 = cupy.asarray(vec2)
     assert vec1.dtype == vec2.dtype == cupy.float64
     assert vec1.shape == vec2.shape
+    if cupy.cuda.runtime.is_hip:
+        # The CUDA JIT reduction assumes 32-lane warps and a 32-bit mask.
+        return cupy.dot(vec1.ravel(), vec2.ravel())
     n = vec1.size
 
     fn_name = 'vec_dot_kernel_order'
@@ -1327,7 +1322,7 @@ void ''' + fn_name + r'''(double *out, double *vec1, double *vec2, long long n) 
     int lane = tid % 32;
     if (lane == 0) atomicAdd(out, sum);
 }''')
-        _kernel_registery[fn_name] = cupy.RawKernel(kernel_source(kernel_code), fn_name)
+        _kernel_registery[fn_name] = cupy.RawKernel(kernel_code, fn_name)
 
     kernel = _kernel_registery[fn_name]
     out = cupy.zeros(1)
@@ -1472,7 +1467,7 @@ def eigh(a, b=None, overwrite=False):
             e = asarray(e)
             c = asarray(c)
             return e, c
-        return cupy.linalg.eigh(a)
+        return cusolver.eigh_std(a)
 
     if a.shape[0] > cusolver.MAX_EIGH_DIM:
         if not SCIPY_EIGH_FOR_LARGE_ARRAYS:

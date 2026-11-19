@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if(NOT USE_HIP)
-  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --ptxas-options=-v")# -maxrregcount=128")
-endif()
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --ptxas-options=-v")# -maxrregcount=128")
 
 add_library(gdft SHARED
   nr_eval_gto.cu
@@ -25,9 +23,6 @@ add_library(gdft SHARED
   libxc.cu
 )
 
-g4p_set_hip_language(gdft)
 set_target_properties(gdft PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR})
-if(USE_HIP)
-  set_target_properties(gdft PROPERTIES HIP_ARCHITECTURES "${CMAKE_HIP_ARCHITECTURES}")
-endif()
+gpu4pyscf_configure_gpu_target(gdft)

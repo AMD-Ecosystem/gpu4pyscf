@@ -17,9 +17,9 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <cuda_runtime.h>
 #include "gvhf-rys/vhf.cuh"
 #include "gvhf-rys/rys_contract_k.cuh"
+#include "../warp_size.h"   // WARP_SIZE (per-arch) + gpu4pyscf_effective_warp_size()
 #include "ft_ao.cuh"
 
 #define THREADS         256
@@ -64,7 +64,7 @@ void ft_ao_bdiv_kernel(double *out, RysIntEnvVars envs, int nGv, double *Gv)
     double *gyI = gxR + gx_len*3;
     double *gzR = gxR + gx_len*4;
     double *gzI = gxR + gx_len*5;
-    int *idx = _c_cartesian_lexical_xyz + lex_xyz_offset(li);
+    const int *idx = _c_cartesian_lexical_xyz + lex_xyz_offset(li);
 
     double goutR[AUXNF];
     double goutI[AUXNF];
@@ -294,21 +294,10 @@ while (1) {
         __syncthreads();
         if (thread_id < WARPS) {
             int count = img_counts[thread_id];
-#ifdef USE_HIP
-            // Reduce the WARPS per-warp partials (held by threads 0..WARPS-1)
-            // with an explicit width-WARPS shuffle; threads 0..WARPS-1 lie in
-            // one width-WARPS segment on both wave sizes (WARPS is a power of
-            // two <= 32). HIP's __shfl_down_sync would otherwise default to the
-            // full warpSize and reach stale lanes on wave64.
-            for (int offset = WARPS/2; offset > 0; offset /= 2) {
-                count = max(count, __shfl_down(count, offset, WARPS));
-            }
-#else
             unsigned mask = (1u << WARPS) - 1;
             for (int offset = WARPS/2; offset > 0; offset /= 2) {
                 count = max(count, __shfl_down_sync(mask, count, offset));
             }
-#endif
             if (thread_id == 0) {
                 img_max = count;
             }
@@ -1149,14 +1138,25 @@ while (1) {
 }
 
 extern "C" {
-int build_ft_ao(double *out, RysIntEnvVars *envs, int ngrids, double *grids)
+// Effective wavefront width of the running device (32 on RDNA/NVIDIA, 64 on
+// GCN/CDNA). ft_ao.py queries this so the host-side nGv_per_block / shm_size it
+// passes to build_ft_aopair match the per-arch device WARP_SIZE in a single
+// multi-arch (fat-binary) build.
+int PBC_warp_size()
 {
+    return gpu4pyscf_effective_warp_size();
+}
+
+int build_ft_ao(double *out, RysIntEnvVars *envs, int ngrids, double *grids, cudaStream_t stream)
+{
+    // NG_PER_BLOCK and FT_AO_THREADS are fixed (ft_ao.cuh), so this host launch
+    // matches the device kernel on every arch of a multi-arch build.
     int nsh_per_block = FT_AO_THREADS/NG_PER_BLOCK;
     dim3 threads(NG_PER_BLOCK, nsh_per_block);
     int nbatches_grids = (ngrids + NG_PER_BLOCK - 1) / NG_PER_BLOCK;
     int nbatches_shls = (envs->nbas + nsh_per_block - 1) / nsh_per_block;
     dim3 blocks(nbatches_grids, nbatches_shls);
-    ft_ao_bdiv_kernel<<<blocks, threads>>>(out, *envs, ngrids, grids);
+    ft_ao_bdiv_kernel<<<blocks, threads, 0, stream>>>(out, *envs, ngrids, grids);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         fprintf(stderr, "CUDA Error in ft_ao_bdiv_kernel: %s\n", cudaGetErrorString(err));
@@ -1169,14 +1169,14 @@ int build_ft_aopair(double *out, PBCIntEnvVars *envs, double *pool, int *head,
                     int shm_size, int nbatches_shl_pair, int *shl_pair_offsets,
                     uint32_t *bas_ij_idx, int *img_idx, uint32_t *img_offsets,
                     int *gout_stride_lookup, int *ao_pair_loc, int ao_pair_offset,
-                    double *grids, int ngrids, int *ao_loc, int compressing, int to_sph)
+                    double *grids, int ngrids, int *ao_loc, int compressing, int to_sph, cudaStream_t stream)
 {
     cudaFuncSetAttribute(ft_aopair_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shm_size);
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
     int workers = prop.multiProcessorCount;
-    cudaMemset(head, 0, sizeof(int));
-    ft_aopair_kernel<<<workers, THREADS, shm_size>>>(
+    cudaMemsetAsync(head, 0, sizeof(int), stream);
+    ft_aopair_kernel<<<workers, THREADS, shm_size, stream>>>(
         out, *envs, pool, shl_pair_offsets, bas_ij_idx, img_idx, img_offsets,
         gout_stride_lookup, ao_pair_loc, ao_pair_offset, grids, ngrids,
         ao_loc, compressing, to_sph, head, nbatches_shl_pair);

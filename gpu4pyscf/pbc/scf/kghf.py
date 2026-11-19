@@ -24,10 +24,11 @@ from pyscf.data import nist
 from pyscf.pbc.scf import kghf as kghf_cpu
 from pyscf.pbc.scf import addons, chkfile as chkfile_cpu, kuhf as kuhf_cpu
 from gpu4pyscf.lib import logger, utils
-from gpu4pyscf.lib.cupy_helper import tag_array, einsum
+from gpu4pyscf.lib.cupy_helper import tag_array
 from gpu4pyscf.scf import hf as mol_hf
 from gpu4pyscf.scf import ghf as mol_ghf
 from gpu4pyscf.pbc.scf import khf, ghf
+from gpu4pyscf.pbc.gto.pseudo.pp_int import get_pp_soc
 
 
 def get_jk(mf, cell=None, dm_kpts=None, hermi=0, kpts=None, kpts_band=None,
@@ -140,7 +141,7 @@ class KGHF(khf.KSCF):
 
         if s1e is None:
             s1e = self.get_ovlp(cell, self.kpts)
-        ne = float(einsum('kij,kji->', dm, s1e).real)
+        ne = float(cp.einsum('kij,kji->', dm, s1e).real)
         nelectron = float(cell.tot_electrons(nkpts))
         if abs(ne - nelectron) > 0.01*nkpts:
             logger.debug(self, 'Normalizing initial guess from %g to %g electrons per cell',
@@ -204,6 +205,11 @@ class KGHF(khf.KSCF):
         if cell is None: cell = self.cell
         if kpts is None: kpts = self.kpts
         h = ghf._block_diag(khf.KSCF.get_hcore(self, cell, kpts))
+        if self.with_soc and cell._pseudo:
+            vl_soc = get_pp_soc(cell, kpts)
+            s = .5 * cp.asarray(lib.PauliMatrices)
+            vl_soc = cp.einsum('sxy,kspq->kxpyq', 1j * s, vl_soc)
+            h = h + vl_soc.reshape(h.shape)
         if self.with_soc and cell.has_ecp_soc():
             raise NotImplementedError('ECP in PBC SCF')
         return h
@@ -230,7 +236,7 @@ class KGHF(khf.KSCF):
         vhf = vj - vk
         if dm_kpts.ndim == 3 and kpts_band is None:
             nkpts = len(dm_kpts)
-            ecoul = float(einsum('Kij,Kji->', dm_kpts, vj).real) * .5/nkpts
+            ecoul = float(cp.einsum('Kij,Kji->', dm_kpts, vj).real) * .5/nkpts
             vhf = tag_array(vhf, ecoul=ecoul)
         return vhf
 

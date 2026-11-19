@@ -22,7 +22,6 @@ from gpu4pyscf.lib import logger
 from gpu4pyscf.lib.utils import splits_by_blocksize
 from gpu4pyscf.lib.cupy_helper import (
     contract, asarray, ndarray, cholesky, eigh, transpose_sum, get_avail_mem)
-from gpu4pyscf.lib.cupy_helper import einsum
 from gpu4pyscf.df.grad.rhf import (
     _split_l_ctr_pattern, get_ao_pair_loc, libvhf_rys, Int3c2eOpt, int2c2e,
     int3c2e_scheme, _gen_metric_solver, _factorize_dm)
@@ -208,7 +207,8 @@ def _jk_energy_per_atom(int3c2e_opt, dms, j_factor=None, k_factor=None, hermi=0,
             ctypes.cast(ao_pair_loc.data.ptr, ctypes.c_void_p),
             ctypes.c_int(aux_ao_offset),
             ctypes.c_int(nao), ctypes.c_int(nao_pair),
-            ctypes.c_int(naux_in_batch), ctypes.c_int(mol.natm))
+            ctypes.c_int(naux_in_batch), ctypes.c_int(mol.natm),
+            ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
         if err != 0:
             raise RuntimeError('int3c2e_ejk_ip1 failed')
     buf = buf1 = buf2 = compressed = dm_tensor = dm_tensor1 = tmp = None
@@ -305,7 +305,8 @@ def _j_energy_per_atom(int3c2e_opt, dms, j_factor, hermi=0, verbose=None):
         lib.c_null_ptr(),
         ctypes.c_int(0),
         ctypes.c_int(0), ctypes.c_int(0),
-        ctypes.c_int(naux), ctypes.c_int(mol.natm))
+        ctypes.c_int(naux), ctypes.c_int(mol.natm),
+        ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
     if err != 0:
         raise RuntimeError('int3c2e_ejk_ip1 failed')
     ej *= 2
@@ -480,8 +481,8 @@ def _jk_energies_by_dm_factors(int3c2e_opt, dm_factors, j_factor, k_factor,
                 contract('pqr,pi->iqr', j3c, dm1_factor_r[i], out=tmp)
                 contract('iqr,qj->rij', tmp, dm2_factor_l[i], out=j3c_o1o2[i][aux0:aux1])
             if j_factor is not None:
-                auxvec1[:,aux0:aux1] = einsum('pqr,nqp->nr', j3c, dm1)
-                auxvec2[:,aux0:aux1] = einsum('pqr,nqp->nr', j3c, dm2)
+                auxvec1[:,aux0:aux1] = cp.einsum('pqr,nqp->nr', j3c, dm1)
+                auxvec2[:,aux0:aux1] = cp.einsum('pqr,nqp->nr', j3c, dm2)
     j3c_full = buf = buf1 = eval_j3c = j3c = tmp = compressed = None
     t0 = log.timer_debug1('contract dm', *t0)
 
@@ -651,7 +652,8 @@ def _jk_energies_by_dm_factors(int3c2e_opt, dm_factors, j_factor, k_factor,
             ctypes.cast(ao_pair_loc.data.ptr, ctypes.c_void_p),
             ctypes.c_int(aux_ao_offset),
             ctypes.c_int(nao), ctypes.c_int(nao_pair),
-            ctypes.c_int(naux_in_batch), ctypes.c_int(mol.natm))
+            ctypes.c_int(naux_in_batch), ctypes.c_int(mol.natm),
+            ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
         if err != 0:
             raise RuntimeError('int3c2e_ejk_ip1 failed')
     ejk += ejk_aux
@@ -753,7 +755,8 @@ def _j_energies_per_atom(int3c2e_opt, dm_pairs, j_factor,
         ctypes.cast(gout_stride.data.ptr, ctypes.c_void_p),
         lib.c_null_ptr(), ctypes.c_int(0),
         ctypes.c_int(dms.shape[-1]), ctypes.c_int(0),
-        ctypes.c_int(naux), ctypes.c_int(mol.natm))
+        ctypes.c_int(naux), ctypes.c_int(mol.natm),
+        ctypes.c_void_p(cp.cuda.get_current_stream().ptr))
     if err != 0:
         raise RuntimeError('int3c2e_ejk_ip1 failed')
 
@@ -883,7 +886,8 @@ class Gradients(tdrhf_grad.Gradients):
                 hermi = all(x == 1 for x in hermi)
             return _jk_energy_per_atom(
                 int3c2e_opt, dm_list, j_factor, k_factor, hermi,
-                omega, lr_factor, sr_factor, verbose=verbose)
+                omega=omega, lr_factor=lr_factor, sr_factor=sr_factor,
+                verbose=verbose)
 
         ejk = _jk_energies_per_atom(
             int3c2e_opt, dm_list, j_factor, k_factor, sum_results,

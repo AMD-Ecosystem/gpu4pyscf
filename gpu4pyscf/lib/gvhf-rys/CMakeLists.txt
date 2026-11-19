@@ -1,6 +1,4 @@
-if(NOT USE_HIP)
-  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --ptxas-options=-v")# -maxrregcount=128")
-endif()
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --ptxas-options=-v")# -maxrregcount=128")
 
 add_library(gvhf_rys SHARED
   rys_jk_driver.cu rys_roots_dat.cu
@@ -27,10 +25,9 @@ add_library(gvhf_rys SHARED
 #  set(BUILD_SHARED_LIBS 0)
 #endif()
 
-g4p_set_hip_language(gvhf_rys)
 set_target_properties(gvhf_rys PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}
-  CUDA_SEPARABLE_COMPILATION ON
-  HIP_SEPARABLE_COMPILATION ON)
+  CUDA_SEPARABLE_COMPILATION ON)
+gpu4pyscf_configure_gpu_target(gvhf_rys)
 
 target_link_libraries(gvhf_rys OpenMP::OpenMP_C)

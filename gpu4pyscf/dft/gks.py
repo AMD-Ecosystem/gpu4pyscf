@@ -21,7 +21,7 @@ from gpu4pyscf.scf import hf
 from gpu4pyscf.scf.ghf import GHF
 from gpu4pyscf.lib import logger
 from gpu4pyscf.lib import utils
-from gpu4pyscf.lib.cupy_helper import tag_array, asarray, einsum
+from gpu4pyscf.lib.cupy_helper import tag_array, asarray
 
 
 def get_veff(ks, mol=None, dm=None, dm_last=None, vhf_last=None, hermi=1):
@@ -58,15 +58,14 @@ def get_veff(ks, mol=None, dm=None, dm_last=None, vhf_last=None, hermi=1):
     if dm is None: dm = ks.make_rdm1()
     log = logger.new_logger(ks)
     t0 = log.init_timer()
-    ks.initialize_grids(mol, dm)
+    if ks.grids.coords is None:
+        rks.initialize_grids(ks, mol, dm)
+    ni = ks._numint
 
     if hermi == 2:  # because rho = 0
         n, exc, vxc = 0, 0, 0
     else:
         max_memory = ks.max_memory - lib.current_memory()[0]
-        ni = ks._numint
-        if ni.collinear[0].lower() != 'm':
-            raise NotImplementedError('Only multi-colinear GKS is implemented')
         n, exc, vxc = ni.get_vxc(mol, ks.grids, ks.xc, dm,
                                  hermi=hermi, max_memory=max_memory)
         log.debug('nelec by numeric integration = %s', n)
@@ -102,7 +101,7 @@ def get_veff(ks, mol=None, dm=None, dm_last=None, vhf_last=None, hermi=1):
         if vj_last is not None:
             vhf += asarray(vhf_last.vj)
         vxc += vhf
-        exc += float(einsum('ij,ji', dm_orig, vhf).real.get()) * .5
+        exc += float(cp.einsum('ij,ji', dm_orig, vhf).real.get()) * .5
         if ecoul is not None:
             exc -= ecoul
         log.timer_debug1('vk', *cput2)
@@ -132,8 +131,6 @@ class GKS(rks.KohnShamDFT, GHF):
         logger.info(self, 'collinear = %s', self._numint.collinear)
         if self._numint.collinear[0] == 'm':
             logger.info(self, 'mcfun spin_samples = %s', self._numint.spin_samples)
-            logger.info(self, 'mcfun collinear_thrd = %s', self._numint.collinear_thrd)
-            logger.info(self, 'mcfun collinear_samples = %s', self._numint.collinear_samples)
         return self
 
     @property
@@ -162,7 +159,4 @@ class GKS(rks.KohnShamDFT, GHF):
     
     def to_cpu(self):
         mf = gks.GKS(self.mol, xc=self.xc)
-        utils.to_cpu(self, out=mf)
-        mf.collinear = self.collinear
-        mf.spin_samples = self.spin_samples
-        return mf
+        return utils.to_cpu(self, out=mf)

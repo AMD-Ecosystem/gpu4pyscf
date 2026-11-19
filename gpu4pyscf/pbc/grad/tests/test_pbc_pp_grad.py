@@ -39,7 +39,6 @@ from gpu4pyscf.pbc.gto.pseudo import pp_int
 from gpu4pyscf.pbc.lib.kpts_helper import fft_matrix
 from gpu4pyscf.pbc.grad.pp import ppnl_derivatives
 import pytest
-from gpu4pyscf.lib.cupy_helper import einsum
 
 disp = 1e-4
 
@@ -143,7 +142,8 @@ def vppnl_nuc_grad(cell, dm, kpts=None):
     from gpu4pyscf.lib.cupy_helper import contract
     from gpu4pyscf.lib import logger
     from gpu4pyscf.gto.mole import groupby
-    from gpu4pyscf.pbc.gto.pseudo.pp_int import _int_vnl_gpu, _sorted_fake_cell_vnl
+    from gpu4pyscf.pbc.gto.pseudo.pp_int import _sorted_fake_cell_vnl
+    from gpu4pyscf.pbc.gto.pseudo.pp_int import _int_vnl as _int_vnl_gpu
     if kpts is None:
         kpts_lst = np.zeros((1, 3))
     else:
@@ -290,7 +290,7 @@ class TestCrossBasisIntegrals(unittest.TestCase):
     """Test GPU _int_vnl_gpu against CPU _int_vnl for each element."""
 
     def _compare_integrals(self, cell, intors=None, comp=1, places=6):
-        from gpu4pyscf.pbc.gto.pseudo.pp_int import _int_vnl_gpu
+        from gpu4pyscf.pbc.gto.pseudo.pp_int import _int_vnl as _int_vnl_gpu
         kpts = np.zeros((1, 3))
         fakecell, hl_blocks = fake_cell_vnl(cell)
 
@@ -551,7 +551,7 @@ class TestFiniteDifference(unittest.TestCase):
 
         def get_pp_local_energy(cell):
             vpplocG = multigrid_v1.eval_vpplocG(cell, ni.mesh)
-            e_vpplocG = einsum("g,g->", rho_g.conj(), vpplocG) / cell.vol
+            e_vpplocG = cp.einsum("g,g->", rho_g.conj(), vpplocG) / cell.vol
             assert abs(e_vpplocG.imag) < 1e-8
             return float(e_vpplocG.real)
 
@@ -621,7 +621,7 @@ class TestFiniteDifference(unittest.TestCase):
         cp.random.seed(11)
         dm = cp.random.rand(nkpts, nao, nao) * .2
         expLk = fft_matrix(kmesh)
-        dm = einsum('Lk,Lpq->kpq', expLk.conj(), dm)
+        dm = cp.einsum('Lk,Lpq->kpq', expLk.conj(), dm)
         dm = dm + dm.conj().transpose(0,2,1)
         ref = vppnl_nuc_grad(cell, dm, kpts) / nkpts
         dat = ppnl_derivatives(cell, dm, kpts)
@@ -632,10 +632,10 @@ class TestFiniteDifference(unittest.TestCase):
         disp = 1e-4
         for (i, j) in [(0, 0), (0, 1), (0, 2), (2, 0), (2, 2)]:
             cell1, cell2 = _finite_diff_cells(cell, i, j, disp=disp)
-            v = pp_int.get_pp_nl_gpu(cell1, cell1.make_kpts(kmesh))
-            e1 = einsum('kpq,kqp->', dm, v).real / nkpts
-            v = pp_int.get_pp_nl_gpu(cell2, cell2.make_kpts(kmesh))
-            e2 = einsum('kpq,kqp->', dm, v).real / nkpts
+            v = pp_int.get_pp_nl(cell1, cell1.make_kpts(kmesh))
+            e1 = cp.einsum('kpq,kqp->', dm, v).real / nkpts
+            v = pp_int.get_pp_nl(cell2, cell2.make_kpts(kmesh))
+            e2 = cp.einsum('kpq,kqp->', dm, v).real / nkpts
             assert abs(sigma[i, j] - (e1-e2)/2/disp) < 2e-7
 
 

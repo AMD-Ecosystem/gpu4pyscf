@@ -22,7 +22,7 @@ import cupy as cp
 from pyscf import lib
 from pyscf.scf import hf as hf_cpu
 from pyscf.scf import chkfile
-from gpu4pyscf.lib.cupy_helper import asarray, pack_tril, unpack_tril, tag_array, einsum
+from gpu4pyscf.lib.cupy_helper import asarray, pack_tril, unpack_tril, tag_array
 from gpu4pyscf.lib.diis import DIIS
 from gpu4pyscf.scf import diis, jk, j_engine, hf
 from gpu4pyscf.lib import logger
@@ -239,6 +239,8 @@ class RHF(hf.RHF):
         '''Constructus the lower-triangular part of the Veff matrix.'''
         log = logger.new_logger(mol, self.verbose)
         cput0 = log.init_timer()
+        if dm_or_wfn is None:
+            dm_or_wfn = self.make_wfn(self.mo_coeff, self.mo_occ)
 
         omega = mol.omega
         if omega in self._opt_gpu:
@@ -397,13 +399,13 @@ def _trace_ecoul(vj, dm_or_wfn, dm_last, vhf_last):
         if isinstance(dm_last, WaveFunction):
             dm_last = dm_last.make_rdm1()
         ddm -= dm_last
-        ecoul = einsum('ij,ji->', dm_last, vj).real.get()
-        ecoul += einsum('ij,ji->', ddm, vj).real.get() * .5
+        ecoul = cp.einsum('ij,ji->', dm_last, vj).real.get()
+        ecoul += cp.einsum('ij,ji->', ddm, vj).real.get() * .5
         ecoul += vhf_last.ecoul
     else:
         if isinstance(dm_or_wfn, WaveFunction):
             ddm = dm_or_wfn.make_rdm1()
         else:
             ddm = dm_or_wfn
-        ecoul = einsum('ij,ji->', ddm, vj).real.get() * .5
+        ecoul = cp.einsum('ij,ji->', ddm, vj).real.get() * .5
     return ecoul

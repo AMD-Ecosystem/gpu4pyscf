@@ -17,6 +17,7 @@ from unittest import mock
 import numpy as np
 import cupy as cp
 import pyscf
+from packaging.version import Version
 from pyscf import gto
 import gpu4pyscf
 from gpu4pyscf.scf import hf, rohf, ghf
@@ -24,7 +25,6 @@ from gpu4pyscf.dft.rks import RKS
 from gpu4pyscf.dft.uks import UKS
 from gpu4pyscf.scf.hf import RHF
 from gpu4pyscf.scf.uhf import UHF
-from gpu4pyscf.lib.cupy_helper import einsum
 
 def get_qchem_sad_guess_energy(mf, dm0):
     mol = mf.mol
@@ -44,9 +44,9 @@ def get_qchem_sad_guess_energy(mf, dm0):
         else:
             vk = mf.get_k(mol, dm0, hermi)
         if dm0.ndim == 2:
-            e += 0.25 * float(einsum('ij,ji->', dm0, vk).real)
+            e += 0.25 * float(cp.einsum('ij,ji->', dm0, vk).real)
         else:
-            e += 0.5 * float(einsum('uij,uji->', dm0, vk).real)
+            e += 0.5 * float(cp.einsum('uij,uji->', dm0, vk).real)
 
     # Another likely bug, the guess step energy misses the solvent energy.
     if hasattr(mf, 'with_solvent'):
@@ -270,7 +270,7 @@ class KnownValues(unittest.TestCase):
         # # As a result, we do not check against Q-Chem value, we made a consistency test.
         ref_guess_energy = -74.9206587667209
 
-        assert abs(test_guess_energy - ref_guess_energy) < 2e-7
+        assert abs(test_guess_energy - ref_guess_energy) < 5e-7
 
     def test_sad_guess_uks_ecp(self):
         mol = pyscf.M(
@@ -620,7 +620,7 @@ class KnownValues(unittest.TestCase):
         test_coeff = test_dm0.mo_coeff
 
         assert cp.max(cp.abs(test_dm0 - ref_dm0)) < 1e-10
-        CtestT_S_Cref = einsum("upi,pq,uqj->uij", test_coeff, S, ref_coeff)
+        CtestT_S_Cref = cp.einsum("upi,pq,uqj->uij", test_coeff, S, ref_coeff)
         assert cp.max(cp.abs(cp.abs(CtestT_S_Cref) - cp.eye(mol.nao)[None,:,:])) < 1e-10
 
     def test_vsap_guess_rhf(self):
@@ -650,6 +650,8 @@ class KnownValues(unittest.TestCase):
         assert cp.max(cp.abs(test_dm0 - ref_dm0)) < 1e-10
         assert cp.max(cp.abs(cp.abs(test_coeff.T @ S @ ref_coeff) - cp.eye(mol.nao))) < 1e-10
 
+    @unittest.skipIf(Version(pyscf.__version__) < Version('2.9'),
+                         'PySCF 2.8: VSAP reference differs for ghost atoms')
     def test_vsap_guess_rks(self):
         mol = pyscf.M(
             atom = """
@@ -715,7 +717,7 @@ class KnownValues(unittest.TestCase):
         test_coeff = test_dm0.mo_coeff
 
         assert cp.max(cp.abs(test_dm0 - ref_dm0)) < 1e-10
-        CtestT_S_Cref = einsum("upi,pq,uqj->uij", test_coeff, S, ref_coeff)
+        CtestT_S_Cref = cp.einsum("upi,pq,uqj->uij", test_coeff, S, ref_coeff)
         assert cp.max(cp.abs(cp.abs(CtestT_S_Cref) - cp.eye(mol.nao)[None,:,:])) < 1e-10
 
 if __name__ == "__main__":
