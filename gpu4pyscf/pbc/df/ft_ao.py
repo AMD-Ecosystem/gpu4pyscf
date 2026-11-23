@@ -58,9 +58,10 @@ POOL_SIZE = 65536
 
 # On gfx12 GPUs, rocBLAS complex GEMM with n > 2**21 leaves the result's
 # columns from 2**21 on unwritten and still reports success: the kernel indexes
-# its n tiles with a 16-bit work-group ID (ROCm/rocm-libraries#14983). Complex
-# products that can be wider than that are split below it. Remove this and its
-# uses once rocBLAS is fixed.
+# its n tiles with a 16-bit work-group ID (ROCm/rocm-libraries#14983). The
+# k-point transforms here and in grad/krhf.py and grad/kuhf.py, and the products
+# in aft_jk.get_ek_derivatives, can be wider than that and are split below it.
+# Remove this and its uses once rocBLAS is fixed.
 COMPLEX_GEMM_MAX_N = None
 if cp.cuda.runtime.is_hip and gpu_specs.get('gcnArchName', b'').startswith(b'gfx12'):
     COMPLEX_GEMM_MAX_N = 1 << 21
