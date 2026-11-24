@@ -142,6 +142,18 @@ When working against an editable install, recompile the libraries in place with
 > are evaluated with PySCF's libXC on the CPU. These fallbacks are automatic but
 > can reduce performance.
 
+> [!WARNING]
+> Known issue with ROCm 10.1 on MI200 and MI300 series GPUs (gfx90a, gfx942): a
+> compiler bug miscompiles the Rys J/K kernels, so calculations with d shells
+> (for example RHF/def2-svp) fail with a GPU memory access fault and then hang.
+> Radeon GPUs did not show it. The compiler fix is in ROCm 10.2 and later (from
+> the compiler sources and the compiled kernel; not yet confirmed by a run on
+> these GPUs). With ROCm 10.1, build with machine LICM disabled
+> (see [#1055](https://github.com/pyscf/gpu4pyscf/pull/1055)):
+> ```sh
+> GPU4PYSCF_BACKEND=hip CMAKE_CONFIGURE_ARGS="-DCMAKE_HIP_FLAGS=-mllvm=-disable-machine-licm" pip install .
+> ```
+
 When combining gpu4pyscf with PyTorch (for example the Skala functional), import
 gpu4pyscf before torch. If torch is imported first, CuPy may be unable to compile
 GPU kernels; gpu4pyscf then raises an `ImportError` explaining how to fix it.
